@@ -1,15 +1,16 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
+use base64::Engine as _;
 use rig::completion::message::Message;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
-use tracing::{info, warn, debug};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::llm::LlmAgent;
-use crate::proto::aibus::*;
 use crate::proto::aibus::ai_bus_service_server::AiBusService;
+use crate::proto::aibus::*;
 
 pub struct AiBusServiceImpl {
     pub agent: Arc<LlmAgent>,
@@ -97,6 +98,61 @@ fn extract_respond_text(input: &str) -> Option<String> {
     parsed.get("Response")?.as_str().map(|s| s.to_string())
 }
 
+/// Check if the current Understand request is a vision request.
+fn is_vision_request(ctx: &SynapseDeviceContext) -> bool {
+    for turn in ctx.turns.iter().rev() {
+        if let Some(synapse_chat_turn::Content::UserRequest(req)) = &turn.content {
+            return req.vision_requested
+                == synapse_user_request_content::VisionRequested::Vision as i32;
+        }
+    }
+    false
+}
+
+/// Extract the observation text from a completed UnderstandScene round-trip.
+fn extract_vision_observation(ctx: &SynapseDeviceContext) -> Option<String> {
+    for turn in ctx.turns.iter().rev() {
+        if let Some(synapse_chat_turn::Content::Observation(obs)) = &turn.content {
+            if !obs.is_final && !obs.observation.trim().is_empty() {
+                return Some(obs.observation.trim().to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Build a single SynapseUnderstandingResponse containing an action turn.
+fn make_action_response(
+    action_name: &str,
+    thought: &str,
+    input_json: &str,
+    parent_id: &str,
+) -> SynapseUnderstandingResponse {
+    let turn_id = Uuid::new_v4().to_string();
+
+    let action = SynapseActionContent {
+        thought: thought.into(),
+        action: action_name.into(),
+        input: input_json.into(),
+        device_payload: Vec::new(),
+        source: SynapseSource::Server as i32,
+    };
+
+    let turn = SynapseChatTurn {
+        user: SynapseUser::Assistant as i32,
+        timestamp: None,
+        identifier: turn_id,
+        parent_identifier: parent_id.into(),
+        content: Some(synapse_chat_turn::Content::Action(action)),
+    };
+
+    SynapseUnderstandingResponse {
+        response: String::new(),
+        is_final: false,
+        body: Some(synapse_understanding_response::Body::Turn(turn)),
+    }
+}
+
 #[tonic::async_trait]
 impl AiBusService for AiBusServiceImpl {
     type UnderstandStream =
@@ -119,29 +175,90 @@ impl AiBusService for AiBusServiceImpl {
         info!(run_id = %run_id, utterance = %utterance, ">>> Understand");
 
         // Extract conversation history from device context
-        let history = if let Some(ref ctx) = req.device_context {
+        let (history, ctx) = if let Some(ref ctx) = req.device_context {
             info!(
                 turns = ctx.turns.len(),
                 is_locked = ctx.is_locked,
                 location = %ctx.reverse_geocoded_location,
                 "    device_context"
             );
+            for (i, turn) in ctx.turns.iter().enumerate() {
+                let kind = match &turn.content {
+                    Some(synapse_chat_turn::Content::UserRequest(_)) => "user_request",
+                    Some(synapse_chat_turn::Content::Action(a)) => {
+                        debug!(idx = i, action = %a.action, input = %a.input, "    turn");
+                        "action"
+                    }
+                    Some(synapse_chat_turn::Content::Observation(o)) => {
+                        debug!(idx = i, is_final = o.is_final, action_name = %o.action_name, obs = %o.observation, "    turn");
+                        "observation"
+                    }
+                    Some(synapse_chat_turn::Content::Message(_)) => "message",
+                    Some(synapse_chat_turn::Content::End(_)) => "end",
+                    Some(synapse_chat_turn::Content::Tao(_)) => "tao",
+                    Some(synapse_chat_turn::Content::Interpretation(_)) => "interpretation",
+                    Some(synapse_chat_turn::Content::Speech(_)) => "speech",
+                    None => "empty",
+                };
+                debug!(idx = i, kind = kind, user = ?turn.user(), "    turn");
+            }
             let h = extract_history(ctx);
             if !h.is_empty() {
                 info!(messages = h.len(), "    extracted history");
             }
-            h
+            (h, Some(ctx))
         } else {
-            Vec::new()
+            (Vec::new(), None)
         };
 
         if let Some(ref loc) = req.location {
-            info!(
-                lat = loc.latitude,
-                lon = loc.longitude,
-                "    location"
-            );
+            info!(lat = loc.latitude, lon = loc.longitude, "    location");
         }
+
+        // --- Vision handling ---
+        //
+        // Phase 1: If this is a fresh vision request (vision_requested == VISION),
+        // return an UnderstandScene action to trigger camera capture + AnalyzeImage.
+        //
+        // Phase 2: If the turns contain a non-final observation for UnderstandScene
+        // (the round-trip from AnalyzeImage is complete), echo the observation text
+        // back as a Respond action.
+        if let Some(ctx) = ctx {
+            // Check for phase 2 first: observation already present from AnalyzeImage
+            if let Some(observation_text) = extract_vision_observation(ctx) {
+                info!(observation = %observation_text, "<<< Vision round-trip complete, responding");
+
+                // TODO: We probably want to feed the observation + original question
+                // back to the LLM for a more conversational/contextualized response,
+                // rather than just echoing the raw observation. For now, keep it simple.
+                let response = make_action_response(
+                    "Respond",
+                    "I analyzed the image and should share my observation with the user",
+                    &serde_json::json!({"Response": observation_text}).to_string(),
+                    &run_id,
+                );
+
+                let stream = tokio_stream::once(Ok(response));
+                return Ok(Response::new(Box::pin(stream)));
+            }
+
+            // Check for phase 1: fresh vision request, no observation yet
+            if is_vision_request(ctx) {
+                info!("<<< Vision request detected, returning UnderstandScene");
+
+                let response = make_action_response(
+                    "UnderstandScene",
+                    "I should look at what the user is seeing",
+                    &serde_json::json!({"Question": utterance}).to_string(),
+                    &run_id,
+                );
+
+                let stream = tokio_stream::once(Ok(response));
+                return Ok(Response::new(Box::pin(stream)));
+            }
+        }
+
+        // --- Normal (non-vision) handling ---
 
         // Call LLM agent with conversation history
         let response_text = match self.agent.chat(utterance, history).await {
@@ -152,34 +269,71 @@ impl AiBusService for AiBusServiceImpl {
             }
         };
 
-        let turn_id = Uuid::new_v4().to_string();
-
         info!(response = %response_text, "<<< Understand responding");
 
-        let action = SynapseActionContent {
-            thought: "I should respond to the user".into(),
-            action: "Respond".into(),
-            input: serde_json::json!({"Response": response_text}).to_string(),
-            device_payload: Vec::new(),
-            source: SynapseSource::Server as i32,
-        };
-
-        let turn = SynapseChatTurn {
-            user: SynapseUser::Assistant as i32,
-            timestamp: None,
-            identifier: turn_id,
-            parent_identifier: run_id,
-            content: Some(synapse_chat_turn::Content::Action(action)),
-        };
-
-        let response = SynapseUnderstandingResponse {
-            response: String::new(),
-            is_final: false,
-            body: Some(synapse_understanding_response::Body::Turn(turn)),
-        };
+        let response = make_action_response(
+            "Respond",
+            "I should respond to the user",
+            &serde_json::json!({"Response": response_text}).to_string(),
+            &run_id,
+        );
 
         // Stream a single response then complete
         let stream = tokio_stream::once(Ok(response));
         Ok(Response::new(Box::pin(stream)))
+    }
+
+    async fn analyze_image(
+        &self,
+        request: Request<AnalyzeImageRequest>,
+    ) -> Result<Response<AnalyzeImageResponse>, Status> {
+        let req = request.into_inner();
+
+        let question = if !req.request.is_empty() {
+            &req.request
+        } else if !req.utterance.is_empty() {
+            &req.utterance
+        } else {
+            "What do you see in this image?"
+        };
+
+        let image_bytes = &req.image_data;
+        info!(
+            question = %question,
+            image_bytes = image_bytes.len(),
+            hints = ?req.image_hints,
+            ">>> AnalyzeImage"
+        );
+
+        if image_bytes.is_empty() {
+            warn!("AnalyzeImage called with empty image_data");
+            return Err(Status::invalid_argument("image_data is empty"));
+        }
+
+        // Encode raw JPEG bytes to base64 for the LLM vision API
+        let image_b64 = base64::engine::general_purpose::STANDARD.encode(image_bytes);
+
+        let observation = match self.agent.vision_prompt(question, &image_b64).await {
+            Ok(text) => text,
+            Err(e) => {
+                warn!(error = %e, "Vision LLM failed");
+                format!("I wasn't able to analyze the image: {}", e)
+            }
+        };
+
+        info!(observation = %observation, "<<< AnalyzeImage responding");
+
+        let response = AnalyzeImageResponse {
+            observation: String::new(),
+            nested_analyze_image_response: Some(NestedAnalyzeImageResponse {
+                response_one_of: Some(
+                    nested_analyze_image_response::ResponseOneOf::GenericImageResponse(
+                        GenericImageResponse { observation },
+                    ),
+                ),
+            }),
+        };
+
+        Ok(Response::new(response))
     }
 }

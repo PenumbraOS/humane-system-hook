@@ -1,6 +1,7 @@
-use rig::completion::message::Message;
+use rig::completion::message::{Message, UserContent, ImageMediaType};
 use rig::prelude::*; // imports CompletionClient trait for .agent()
 use rig::providers;
+use rig::OneOrMany;
 use tracing::{error, info};
 
 use crate::config::LlmConfig;
@@ -117,6 +118,38 @@ impl LlmAgent {
             }),
             LlmAgent::OpenAi(agent) => agent.prompt(utterance).await.map_err(|e| {
                 error!(error = %e, "OpenAI prompt failed");
+                format!("OpenAI error: {}", e)
+            }),
+        }
+    }
+
+    /// Send a vision prompt with an image (base64-encoded JPEG) and a question.
+    pub async fn vision_prompt(&self, question: &str, image_base64: &str) -> Result<String, String> {
+        use rig::completion::Prompt;
+
+        let message = Message::User {
+            content: OneOrMany::many(vec![
+                UserContent::text(question),
+                UserContent::image_base64(
+                    image_base64,
+                    Some(ImageMediaType::JPEG),
+                    None, // detail: auto
+                ),
+            ]).expect("non-empty content vec"),
+        };
+
+        match self {
+            LlmAgent::Echo => Ok(format!("Echo: [vision] {}", question)),
+            LlmAgent::Gemini(agent) => agent.prompt(message).await.map_err(|e| {
+                error!(error = %e, "Gemini vision prompt failed");
+                format!("Gemini error: {}", e)
+            }),
+            LlmAgent::Anthropic(agent) => agent.prompt(message).await.map_err(|e| {
+                error!(error = %e, "Anthropic vision prompt failed");
+                format!("Anthropic error: {}", e)
+            }),
+            LlmAgent::OpenAi(agent) => agent.prompt(message).await.map_err(|e| {
+                error!(error = %e, "OpenAI vision prompt failed");
                 format!("OpenAI error: {}", e)
             }),
         }
