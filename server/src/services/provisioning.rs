@@ -1,7 +1,7 @@
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
-use rand::RngCore;
-use rcgen::{CertificateParams, DistinguishedName, DnType, DnValue, KeyPair};
+use rand::Rng;
+use rcgen::{CertificateParams, DistinguishedName, DnType, DnValue, Issuer, KeyPair};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing::{info, warn};
@@ -24,6 +24,7 @@ const SESSION_KEY: [u8; 32] = [0x42; 32];
 pub struct OnboardingCa {
     pub ca_cert_der: Vec<u8>,
     pub ca_key_pair: KeyPair,
+    ca_params: CertificateParams,
 }
 
 impl OnboardingCa {
@@ -37,6 +38,7 @@ impl OnboardingCa {
         Ok(Self {
             ca_cert_der,
             ca_key_pair: key_pair,
+            ca_params: params,
         })
     }
 
@@ -87,12 +89,11 @@ impl OnboardingCa {
         // it associates its own private key with whatever cert we return)
         let duc_key_pair = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)?;
 
-        // Re-create the CA cert for signing (self_signed consumes params)
-        let ca_params = Self::ca_params();
-        let ca_cert = ca_params.self_signed(&self.ca_key_pair)?;
+        // Build an Issuer from our stored CA params + key pair reference
+        let issuer = Issuer::from_params(&self.ca_params, &self.ca_key_pair);
 
         // Sign the DUC cert with our CA
-        let signed = cert_params.signed_by(&duc_key_pair, &ca_cert, &self.ca_key_pair)?;
+        let signed = cert_params.signed_by(&duc_key_pair, &issuer)?;
 
         Ok(signed.der().to_vec())
     }
@@ -104,7 +105,7 @@ fn encrypt_aes_gcm(plaintext: &[u8]) -> Result<(Vec<u8>, Vec<u8>), Status> {
         .map_err(|e| Status::internal(format!("AES key error: {}", e)))?;
 
     let mut iv_bytes = [0u8; 12];
-    rand::thread_rng().fill_bytes(&mut iv_bytes);
+    rand::rng().fill_bytes(&mut iv_bytes);
     let nonce = Nonce::from_slice(&iv_bytes);
 
     let ciphertext = cipher

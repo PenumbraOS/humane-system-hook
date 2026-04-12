@@ -1,8 +1,13 @@
-//! Standalone gRPC server for Humane AI Pin.
+//! Standalone server for Humane AI Pin.
+//!
+//! Serves gRPC services and an HTTP upload endpoint on the same port.
+//! gRPC requests (content-type: application/grpc) are routed to tonic;
+//! HTTP PUT /upload/:uuid/:filename is handled by axum for media uploads.
 
 mod config;
 mod llm;
 mod services;
+mod storage;
 
 /// Generated protobuf/gRPC modules.
 mod proto {
@@ -27,24 +32,51 @@ mod proto {
     pub mod provisioning {
         tonic::include_proto!("humane.provisioning");
     }
+    pub mod capture {
+        tonic::include_proto!("humane.capture");
+    }
+    pub mod common {
+        pub mod encryption {
+            tonic::include_proto!("humane.common.encryption");
+        }
+    }
+    pub mod privacy {
+        pub mod common {
+            tonic::include_proto!("humane.privacy.grpc.common");
+        }
+        pub mod pub_ {
+            tonic::include_proto!("humane.privacy.grpc.r#pub");
+        }
+    }
 }
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use axum::body::Body;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::routing::put;
+use tokio::sync::Mutex;
+
 use proto::account::user_information_service_server::UserInformationServiceServer;
 use proto::account::wifi_config_service_server::WifiConfigServiceServer;
 use proto::aibus::ai_bus_service_server::AiBusServiceServer;
+use proto::capture::capture_service_server::CaptureServiceServer;
 use proto::contacts::contacts_rpc_service_server::ContactsRpcServiceServer;
 use proto::events::events_ingest_service_server::EventsIngestServiceServer;
 use proto::featureflags::feature_flags_service_server::FeatureFlagsServiceServer;
+use proto::privacy::pub_::public_privacy_service_server::PublicPrivacyServiceServer;
 use proto::provisioning::device_onboarding_dac_service_server::DeviceOnboardingDacServiceServer;
 use proto::pushrelay::push_relay_service_server::PushRelayServiceServer;
 
 use services::aibus::AiBusServiceImpl;
+use services::capture::CaptureServiceImpl;
 use services::contacts::ContactsRpcServiceImpl;
 use services::events::EventsIngestServiceImpl;
 use services::featureflags::FeatureFlagsServiceImpl;
+use services::privacy::PublicPrivacyServiceImpl;
 use services::provisioning::{OnboardingCa, ProvisioningServiceImpl};
 use services::pushrelay::PushRelayServiceImpl;
 use services::user_info::UserInformationServiceImpl;
@@ -52,10 +84,64 @@ use services::wifi_config::WifiConfigServiceImpl;
 
 use config::Config;
 use llm::LlmAgent;
-use tonic::transport::Server;
-use tower_http::classify::GrpcFailureClass;
+use storage::MediaStore;
 use tower_http::trace::TraceLayer;
 use tracing::info;
+
+// ─── HTTP upload handler ────────────────────────────────────────────
+
+/// Shared state passed to the axum upload handler.
+#[derive(Clone)]
+struct UploadState {
+    store: Arc<Mutex<MediaStore>>,
+}
+
+/// PUT /upload/:uuid/:filename — receives media file bytes from the device.
+async fn upload_handler(
+    Path((uuid, filename)): Path<(String, String)>,
+    State(state): State<UploadState>,
+    body: Body,
+) -> impl IntoResponse {
+    info!(uuid, filename, "<<< HTTP PUT /upload");
+
+    // Read the full body
+    let bytes = match axum::body::to_bytes(body, 256 * 1024 * 1024).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to read upload body");
+            return (StatusCode::BAD_REQUEST, format!("failed to read body: {e}"));
+        }
+    };
+
+    info!(uuid, filename, bytes = bytes.len(), "upload received");
+
+    let store = state.store.lock().await;
+
+    // Ensure the directory exists (create "unknown" bucket if needed)
+    let dir = store.base_dir().join(&uuid);
+    if !dir.exists() {
+        if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+            tracing::error!(error = %e, "failed to create upload dir");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to create dir: {e}"),
+            );
+        }
+    }
+
+    match store.save_upload(&uuid, &filename, &bytes).await {
+        Ok(()) => (StatusCode::CREATED, "OK".to_string()),
+        Err(e) => {
+            tracing::error!(uuid, filename, error = %e, "upload save failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("save failed: {e}"),
+            )
+        }
+    }
+}
+
+// ─── main ───────────────────────────────────────────────────────────
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -95,11 +181,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .clone()
         .unwrap_or_else(|| "Penumbra".into());
 
-    let addr = format!("0.0.0.0:{}", port).parse()?;
+    // Open media store
+    let media_store = Arc::new(Mutex::new(
+        MediaStore::open(&config.storage.media_dir).await?,
+    ));
+
+    // Server address the device will use in upload URLs
+    let server_addr = format!("0.0.0.0:{port}");
+    let bind_addr: std::net::SocketAddr = server_addr.parse()?;
+    let public_addr = config
+        .server
+        .public_addr
+        .clone()
+        .unwrap_or_else(|| format!("{}", bind_addr));
 
     let provider_label = config.llm.provider.to_uppercase();
     info!("============================================================");
-    info!("Humane gRPC server listening on {} (plaintext)", addr);
+    info!("Humane gRPC server listening on {} (plaintext)", bind_addr);
+    info!("Upload URL base: http://{}/upload/", public_addr);
     info!(
         "LLM provider: {} (model: {})",
         provider_label, config.llm.model
@@ -108,6 +207,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Onboarding: display_name={}, user_id={}",
         display_name, user_id
     );
+    info!("Storage: media_dir={}", config.storage.media_dir);
     info!("Services:");
     info!(
         "  - humane.aibus.AIBusService/Understand       ({})",
@@ -126,54 +226,83 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("  - humane.events.EventsIngestService/Ingest (discard)");
     info!("  - humane.events.EventsIngestService/IngestBatch (discard)");
     info!("  - humane.provisioning.DeviceOnboardingDACService/* (onboarding)");
+    info!("  - humane.capture.CaptureService/* (photo/video/note storage)");
+    info!("  - humane.privacy.grpc.pub.PublicPrivacyService/* (stub — empty responses)");
+    info!("  - PUT /upload/:uuid/:filename (HTTP media upload)");
     info!("  - All other RPCs: UNIMPLEMENTED");
     info!("============================================================");
 
-    Server::builder()
-        .layer(
-            TraceLayer::new_for_grpc()
-                .make_span_with(|request: &http::Request<_>| {
-                    tracing::info_span!(
-                        "grpc",
-                        path = %request.uri().path(),
-                    )
-                })
-                .on_request(|_request: &http::Request<_>, _span: &tracing::Span| {
-                    info!("request");
-                })
-                .on_response(
-                    |response: &http::Response<_>,
-                     latency: std::time::Duration,
-                     _span: &tracing::Span| {
-                        info!(latency = ?latency, status = %response.status(), "response");
-                    },
-                )
-                .on_failure(
-                    |error: GrpcFailureClass,
-                     latency: std::time::Duration,
-                     _span: &tracing::Span| {
-                        tracing::error!(latency = ?latency, error = %error, "failed");
-                    },
-                ),
-        )
-        .add_service(AiBusServiceServer::new(AiBusServiceImpl { agent }))
-        .add_service(PushRelayServiceServer::new(PushRelayServiceImpl))
-        .add_service(FeatureFlagsServiceServer::new(FeatureFlagsServiceImpl))
-        .add_service(WifiConfigServiceServer::new(WifiConfigServiceImpl))
-        .add_service(UserInformationServiceServer::new(
-            UserInformationServiceImpl,
-        ))
-        .add_service(ContactsRpcServiceServer::new(ContactsRpcServiceImpl))
-        .add_service(EventsIngestServiceServer::new(EventsIngestServiceImpl))
-        .add_service(DeviceOnboardingDacServiceServer::new(
-            ProvisioningServiceImpl {
-                ca: onboarding_ca,
-                display_name,
-                user_id,
+    // Build the gRPC service stack as a native axum::Router.
+    // We use tonic::service::Routes (not tonic::transport::Server) so we get
+    // an axum-compatible router that can be merged with our HTTP upload routes.
+    let grpc_router =
+        tonic::service::Routes::new(AiBusServiceServer::new(AiBusServiceImpl { agent }))
+            .add_service(PushRelayServiceServer::new(PushRelayServiceImpl))
+            .add_service(FeatureFlagsServiceServer::new(FeatureFlagsServiceImpl))
+            .add_service(WifiConfigServiceServer::new(WifiConfigServiceImpl))
+            .add_service(UserInformationServiceServer::new(
+                UserInformationServiceImpl,
+            ))
+            .add_service(ContactsRpcServiceServer::new(ContactsRpcServiceImpl))
+            .add_service(EventsIngestServiceServer::new(EventsIngestServiceImpl))
+            .add_service(DeviceOnboardingDacServiceServer::new(
+                ProvisioningServiceImpl {
+                    ca: onboarding_ca,
+                    display_name,
+                    user_id,
+                },
+            ))
+            .add_service(CaptureServiceServer::new(CaptureServiceImpl {
+                store: media_store.clone(),
+                server_addr: public_addr.clone(),
+            }))
+            .add_service(PublicPrivacyServiceServer::new(PublicPrivacyServiceImpl))
+            .into_axum_router();
+
+    // Build the axum HTTP router for upload endpoint
+    let upload_state = UploadState { store: media_store };
+
+    // Apply trace layer to the combined router.
+    // Use new_for_http() (not new_for_grpc()) since we serve both HTTP uploads
+    // and gRPC. The HTTP classifier only flags 5xx as failures, which is
+    // correct: gRPC responses always have HTTP 200 status.
+    let trace_layer = TraceLayer::new_for_http()
+        .make_span_with(|request: &http::Request<axum::body::Body>| {
+            tracing::info_span!(
+                "req",
+                method = %request.method(),
+                path = %request.uri().path(),
+            )
+        })
+        .on_request(
+            |_request: &http::Request<axum::body::Body>, _span: &tracing::Span| {
+                info!("request");
             },
-        ))
-        .serve(addr)
-        .await?;
+        )
+        .on_response(
+            |response: &http::Response<_>, latency: std::time::Duration, _span: &tracing::Span| {
+                info!(latency = ?latency, status = %response.status(), "response");
+            },
+        )
+        .on_failure(
+            |error: tower_http::classify::ServerErrorsFailureClass,
+             latency: std::time::Duration,
+             _span: &tracing::Span| {
+                tracing::error!(latency = ?latency, error = %error, "failed");
+            },
+        );
+
+    // Explicit HTTP routes get priority; gRPC routes are merged in.
+    // Since gRPC paths (e.g. /humane.aibus.AIBusService/Understand) don't
+    // conflict with /upload/{uuid}/{filename}, merge works cleanly.
+    let app = axum::Router::new()
+        .route("/upload/{uuid}/{filename}", put(upload_handler))
+        .with_state(upload_state)
+        .fallback_service(grpc_router)
+        .layer(trace_layer);
+
+    let listener = tokio::net::TcpListener::bind(bind_addr).await?;
+    axum::serve(listener, app).await?;
 
     Ok(())
 }

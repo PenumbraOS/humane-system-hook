@@ -1,0 +1,152 @@
+syntax = "proto3";
+
+package humane.privacy.grpc.pub;
+
+import "google/protobuf/timestamp.proto";
+import "humane/privacy/privacy_common.proto";
+
+// ─── Krypton key types (simplified — field numbers match APK) ──────
+
+// humane.krypton.grpc.auth.Credentials
+message Credentials {
+  string device_id  = 1;
+  string user_id    = 2;
+  string service_id = 3;
+  string admin_id   = 4;
+}
+
+// humane.krypton.grpc.key.ClearKey (simplified: enums kept as int32)
+message ClearKey {
+  bytes  kid         = 1;
+  int32  level       = 2;
+  int32  algo        = 3;
+  repeated int32 ops = 4 [packed = true];
+  bytes  jca_encoded = 5;
+  string jca_algo    = 6;
+}
+
+// humane.krypton.grpc.key.WrappedKey
+message WrappedKey {
+  bytes wrapping_kid = 1;
+  bytes metadata     = 2;
+  bytes keydata      = 3;
+  bytes iv           = 4;
+  bytes auth_tag     = 5;
+}
+
+// ─── Privacy-specific message types ────────────────────────────────
+
+message ImportableKey {
+  bytes kid = 1;
+  oneof key {
+    WrappedKey wrapped_key = 2;
+    ClearKey   clear_key   = 3;
+  }
+  oneof attrs {
+    humane.privacy.grpc.common.ClientKeyAttributes    client_attrs    = 4;
+    humane.privacy.grpc.common.EphemeralKeyAttributes  ephemeral_attrs = 5;
+  }
+}
+
+message ExportableKey {
+  bytes                                              kid          = 1;
+  humane.privacy.grpc.common.KeyState                status       = 2;
+  oneof key {
+    WrappedKey wrapped_key = 3;
+    ClearKey   clear_key   = 4;
+  }
+  humane.privacy.grpc.common.ClientKeyAttributes     client_attrs = 5;
+  Credentials                                        creds        = 6;
+}
+
+message ClientKeyUpdate {
+  bytes                                              kid          = 1;
+  humane.privacy.grpc.common.ClientKeyAttributes     client_attrs = 2;
+}
+
+message PrivacySettingConfiguration {
+  string          name    = 1;
+  string          value   = 2;
+  string          manager = 3;
+  repeated string labels  = 4;
+}
+
+// ─── Request / Response pairs ──────────────────────────────────────
+
+message EstablishWrappingKeysRequest {
+  ClearKey clear_key = 1;
+}
+message EstablishWrappingKeysResponse {
+  ClearKey clear_key = 2;
+}
+
+message ImportKeysRequest {
+  repeated ImportableKey keys = 1;
+}
+message ImportKeysResponse {
+  repeated humane.privacy.grpc.common.KeyStateResponse results = 1;
+}
+
+message RequestKeysRequest {
+  repeated bytes kids = 1;
+}
+message RequestKeysResponse {
+  repeated ExportableKey keys = 1;
+}
+
+message UpdateKeysRequest {
+  repeated ClientKeyUpdate updates = 1;
+}
+message UpdateKeysResponse {
+  repeated humane.privacy.grpc.common.KeyStateResponse results = 1;
+}
+
+message RemoveKeysRequest {
+  repeated bytes kids = 1;
+  optional bool  deleted = 2;
+}
+message RemoveKeysResponse {
+  repeated humane.privacy.grpc.common.KeyStateResponse results = 1;
+}
+
+message SyncKeysRequest {}
+message SyncKeysResponse {
+  repeated bytes         delete_kids   = 1;
+  repeated ExportableKey exported_keys = 2;
+}
+
+message GetSettingsRequest {
+  repeated string names = 1;
+}
+message GetSettingsResponse {
+  repeated humane.privacy.grpc.common.PrivacySettingInfo settings = 1;
+}
+
+message UpdateSettingsRequest {
+  repeated humane.privacy.grpc.common.PrivacySetting settings = 1;
+}
+message UpdateSettingsResponse {
+  repeated humane.privacy.grpc.common.SettingStateResponse results = 1;
+}
+
+message GetConfigurationRequest {
+  google.protobuf.Timestamp since_ts = 1;
+}
+message GetConfigurationResponse {
+  google.protobuf.Timestamp            updated_ts = 1;
+  repeated PrivacySettingConfiguration configs    = 2;
+}
+
+// ─── Service ───────────────────────────────────────────────────────
+
+service PublicPrivacyService {
+  rpc EstablishWrappingKeys (EstablishWrappingKeysRequest) returns (EstablishWrappingKeysResponse);
+  rpc ImportKeys            (ImportKeysRequest)            returns (ImportKeysResponse);
+  rpc RequestKeys           (RequestKeysRequest)           returns (RequestKeysResponse);
+  rpc UpdateKeys            (UpdateKeysRequest)            returns (UpdateKeysResponse);
+  rpc RemoveKeys            (RemoveKeysRequest)            returns (RemoveKeysResponse);
+  rpc SyncKeys              (SyncKeysRequest)              returns (SyncKeysResponse);
+  rpc GetSettings           (GetSettingsRequest)           returns (GetSettingsResponse);
+  rpc UpdateSettings        (UpdateSettingsRequest)        returns (UpdateSettingsResponse);
+  rpc GetConfiguration      (GetConfigurationRequest)      returns (GetConfigurationResponse);
+}

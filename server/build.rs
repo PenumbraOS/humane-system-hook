@@ -1,5 +1,5 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tonic_build::configure()
+    tonic_prost_build::configure()
         .build_server(true)
         .build_client(false)
         .compile_protos(
@@ -11,6 +11,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/humane/contacts/contacts.proto",
                 "proto/humane/events/events.proto",
                 "proto/humane/provisioning/provisioning.proto",
+                "proto/humane/capture/capture.proto",
+                "proto/humane/common/encryption.proto",
+                "proto/humane/privacy/privacy.proto",
+                "proto/humane/privacy/privacy_common.proto",
             ],
             &["proto"],
         )?;

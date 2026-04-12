@@ -1,0 +1,418 @@
+syntax = "proto3";
+
+package humane.capture;
+
+option java_multiple_files = true;
+
+import "google/protobuf/timestamp.proto";
+import "humane/common/encryption.proto";
+
+// ─── Service ────────────────────────────────────────────────────────
+
+service CaptureService {
+  rpc CreateMemory (CreateMemoryRequest) returns (CreateMemoryResponse);
+  rpc DeleteMemory (DeleteMemoryRequest) returns (DeleteMemoryResponse);
+  rpc UploadComplete (UploadCompleteRequest) returns (UploadCompleteResponse);
+  rpc UploadFile (UploadRequest) returns (UploadResponse);
+  rpc ReportPhotographyExperienceStatus (ReportPhotographyExperienceStatusRequest) returns (ReportPhotographyExperienceStatusResponse);
+  rpc GetCaptureConfig (GetCaptureConfigRequest) returns (GetCaptureConfigResponse);
+  rpc GetFoodLogSummary (GetFoodLogSummaryRequest) returns (GetFoodLogSummaryResponse);
+  rpc GetMemoryShareLink (GetShareLinkRequest) returns (GetShareLinkResponse);
+  rpc SaveSharedMemory (SaveSharedMemoryRequest) returns (SaveSharedMemoryResponse);
+  rpc GetShareLinkContents (GetShareLinkContentsRequest) returns (GetShareLinkContentsResponse);
+  rpc DeclareMemoryCreateIntent (MemoryCreateIntentRequest) returns (MemoryCreateIntentResponse);
+}
+
+// ─── CreateMemory ───────────────────────────────────────────────────
+
+message CreateMemoryRequest {
+  oneof request {
+    PhotoMemoryRequest photo_memory_request = 1;
+    VideoMemoryRequest video_memory_request = 2;
+    FoodLogMemoryRequest food_log_memory_request = 3;
+    NoteMemoryRequest note_memory_request = 4;
+  }
+}
+
+message CreateMemoryResponse {
+  CreateMemoryResultStatus status = 1;
+  Memory memory = 2;
+  oneof response {
+    PhotoMemoryResponse photo_memory_response = 3;
+    VideoMemoryResponse video_memory_response = 4;
+    FoodLogMemoryResponse food_log_memory_response = 5;
+    NoteMemoryResponse note_memory_response = 6;
+  }
+}
+
+enum CreateMemoryResultStatus {
+  CREATE_MEMORY_RESULT_STATUS_UNSPECIFIED = 0;
+  CREATE_MEMORY_RESULT_STATUS_SUCCESS = 1;
+  CREATE_MEMORY_RESULT_STATUS_FAILURE = 2;
+}
+
+message Memory {
+  string id = 1 [deprecated = true];
+  string uuid = 2;
+}
+
+// ─── Photo Memory ───────────────────────────────────────────────────
+
+message PhotoMemoryRequest {
+  int32 num_bursts = 1;
+  int32 num_pics_per_burst = 2;
+  string lut_name = 3;
+  bytes thumbnail_bytes = 4 [deprecated = true];
+  PhotoFileFormat format = 5;
+  humane.common.encryption.EncryptionInformation encryption_information = 6;
+  humane.common.encryption.EncryptedData thumbnail = 7 [deprecated = true];
+  humane.common.encryption.EncryptedData encrypted_location = 8;
+  string device_local_id = 9;
+  repeated humane.common.encryption.EncryptedData thumbnails = 10;
+  google.protobuf.Timestamp device_created_time = 11;
+  sint32 gmt_offset = 12;
+  repeated ImageMetadata photo_metadatas = 13;
+}
+
+message PhotoMemoryResponse {
+  repeated CaptureBurst bursts = 1;
+}
+
+// ─── Video Memory ───────────────────────────────────────────────────
+
+message VideoMemoryRequest {
+  int32 num_videos = 1;
+  bytes thumbnail_bytes = 2;
+  int32 total_video_duration_sec = 3;
+  humane.common.encryption.EncryptionInformation encryption_information = 4;
+  humane.common.encryption.EncryptedData thumbnail = 5;
+  humane.common.encryption.EncryptedData encrypted_location = 6;
+  string device_local_id = 7;
+  google.protobuf.Timestamp device_created_time = 8;
+  sint32 gmt_offset = 9;
+}
+
+message VideoMemoryResponse {
+  repeated CaptureBurst bursts = 1;
+  CalibrationData calibration_data = 2;
+}
+
+// ─── Food Log Memory ────────────────────────────────────────────────
+
+message FoodLogMemoryRequest {
+  humane.common.encryption.EncryptedData food_log = 1;
+  google.protobuf.Timestamp device_created_time = 2;
+  string device_local_id = 3;
+}
+
+message FoodLogMemoryResponse {}
+
+// ─── Note Memory ────────────────────────────────────────────────────
+
+message NoteMemoryRequest {
+  humane.common.encryption.EncryptedData encrypted_note = 1;
+  humane.common.encryption.EncryptedData encrypted_location = 2;
+}
+
+message NoteMemoryResponse {}
+
+// ─── CaptureBurst / CaptureFile ─────────────────────────────────────
+
+message CaptureBurst {
+  int64 id = 1 [deprecated = true];
+  int64 index = 2;
+  repeated CaptureFile files = 3;
+  string uuid = 4;
+}
+
+message CaptureFile {
+  int64 id = 1 [deprecated = true];
+  int64 index = 2;
+  string filename = 3 [deprecated = true];
+  string metadata_filename = 4;
+  string secure_filename = 5;
+  string secure_raw_data_filename = 6;
+  string uuid = 7;
+  string imu_data_filename = 8;
+  string video_timing_data_filename = 9;
+}
+
+// ─── Image Metadata ─────────────────────────────────────────────────
+
+message ImageMetadata {
+  string photo_filename = 1 [deprecated = true];
+  string burst_id = 2;
+  string memory_id = 3 [deprecated = true];
+  google.protobuf.Timestamp rgb_timestamp = 4 [deprecated = true];
+  int32 resolution_width = 5;
+  int32 resolution_height = 6;
+  repeated int32 strides = 7 [packed = true];
+  ImageFormat format = 8;
+  ColorSpace color_space = 9;
+  OrientationInfo orientation_info = 10;
+  CameraIntrinsics color_intrinsics = 11;
+  // Field 12 intentionally skipped (not present in decompiled source)
+  ShutterSpeed shutter_speed = 13;
+  ISO iso = 14;
+  float luminance = 15;
+}
+
+message OrientationInfo {
+  // Reconstructed — exact fields unknown, treated as opaque.
+  int32 orientation = 1;
+}
+
+message CameraIntrinsics {
+  float focal_length = 1;
+  FloatMatrix device_transform = 2;
+  float center_x = 3;
+  float center_y = 4;
+  repeated float distortion = 5 [packed = true];
+  int32 pixels_wide = 6;
+  int32 pixels_height = 7;
+  string serial = 8;
+}
+
+message FloatMatrix {
+  int32 rows = 1;
+  int32 cols = 2;
+  repeated float data = 3 [packed = true];
+}
+
+message ShutterSpeed {
+  int32 numerator = 1;
+  int32 denominator = 2;
+}
+
+message ISO {
+  int32 value = 1;
+}
+
+message CalibrationData {
+  bool device_should_upload = 1;
+  string filename = 2;
+}
+
+// ─── Enums ──────────────────────────────────────────────────────────
+
+enum MemoryType {
+  MEMORY_TYPE_UNSPECIFIED = 0;
+  MEMORY_TYPE_PHOTO = 1;
+  MEMORY_TYPE_VIDEO = 2;
+  MEMORY_TYPE_NOTE = 3;
+  MEMORY_TYPE_FOOD_LOG = 4;
+}
+
+enum MediaType {
+  MEDIA_TYPE_UNKNOWN = 0;
+  MEDIA_TYPE_PHOTO = 1;
+  MEDIA_TYPE_AUDIO = 2;
+  MEDIA_TYPE_VIDEO = 3;
+}
+
+enum ImageFormat {
+  IMAGE_FORMAT_UNKNOWN = 0;
+  IMAGE_FORMAT_JPEG = 1;
+  IMAGE_FORMAT_YUVNV21 = 2;
+}
+
+enum PhotoFileFormat {
+  UNKNOWN_FILE_FORMAT = 0;
+  YUVNV21 = 1;
+  JPEG = 2;
+  RGB = 3;
+}
+
+enum ColorSpace {
+  COLOR_SPACE_UNKNOWN = 0;
+  COLOR_SPACE_SRGB = 1;
+}
+
+enum UploadType {
+  UPLOAD_TYPE_UNSET = 0;
+  UPLOAD_TYPE_IMAGE = 1;
+  UPLOAD_TYPE_VIDEO = 2;
+  UPLOAD_TYPE_AUDIO = 3;
+  UPLOAD_TYPE_METADATA = 4;
+  UPLOAD_TYPE_BYTES = 5;
+  UPLOAD_TYPE_YUV = 6;
+  UPLOAD_TYPE_IMU_DATA = 7;
+  UPLOAD_TYPE_CALIBRATION_DATA = 8;
+  UPLOAD_TYPE_VIDEO_TIMING_DATA = 9;
+}
+
+// ─── DeleteMemory ───────────────────────────────────────────────────
+
+message DeleteMemoryRequest {
+  int64 memory_id = 1 [deprecated = true];
+  string memory_uuid = 2;
+}
+
+message DeleteMemoryResponse {
+  DeleteMemoryStatus status = 1;
+}
+
+enum DeleteMemoryStatus {
+  DELETE_MEMORY_STATUS_UNSPECIFIED = 0;
+  DELETE_MEMORY_STATUS_SUCCESS = 1;
+  DELETE_MEMORY_STATUS_NOT_FOUND = 2;
+  DELETE_MEMORY_STATUS_FAILURE = 3;
+}
+
+// ─── UploadFile ─────────────────────────────────────────────────────
+
+message UploadRequest {
+  string filename = 1;
+  UploadType upload_type = 2;
+  string mime_encoding = 3;
+}
+
+message UploadResponse {
+  string url = 1;
+}
+
+// ─── UploadComplete ─────────────────────────────────────────────────
+
+message UploadCompleteRequest {
+  int64 memory_id = 1 [deprecated = true];
+  UploadCompletionStatus success = 2;
+  string memory_uuid = 3;
+  int32 retry_number = 4;
+  int32 max_retries = 5;
+}
+
+message UploadCompleteResponse {
+  UploadCompleteStatus status = 1;
+}
+
+enum UploadCompletionStatus {
+  UNKNOWN_UPLOAD_COMPLETION_STATUS = 0;
+  UPLOAD_SUCCESS = 1;
+  UPLOAD_FAILURE = 2;
+  UPLOAD_FAILURE_FINAL = 3;
+}
+
+enum UploadCompleteStatus {
+  UPLOAD_COMPLETE_STATUS_UNSPECIFIED = 0;
+  UPLOAD_COMPLETE_STATUS_PROCESSING_STARTED = 1;
+  UPLOAD_COMPLETE_STATUS_UPLOAD_INCOMPLETE = 2;
+  UPLOAD_COMPLETE_STATUS_MEMORY_NOT_FOUND = 3;
+  UPLOAD_COMPLETE_STATUS_INTERNAL_ERROR = 4;
+  UPLOAD_COMPLETE_STATUS_BAD_REQUEST = 5;
+  UPLOAD_COMPLETE_STATUS_ACKNOWLEDGED = 6;
+}
+
+// ─── ReportPhotographyExperienceStatus ──────────────────────────────
+
+message ReportPhotographyExperienceStatusRequest {
+  PhotographyExperienceStatus status = 1;
+  string custom_message = 2;
+}
+
+message ReportPhotographyExperienceStatusResponse {}
+
+enum PhotographyExperienceStatus {
+  PHOTOGRAPHY_EXPERIENCE_STATUS_UNSPECIFIED = 0;
+  PHOTOGRAPHY_EXPERIENCE_STATUS_CAMERA_ACQUISITION_ERROR = 1;
+  PHOTOGRAPHY_EXPERIENCE_STATUS_WRITING_TO_DISK_ERROR = 2;
+  PHOTOGRAPHY_EXPERIENCE_STATUS_CRASH = 3;
+}
+
+// ─── GetCaptureConfig ───────────────────────────────────────────────
+
+message GetCaptureConfigRequest {}
+
+message GetCaptureConfigResponse {
+  int32 num_photos_per_burst = 1;
+  CaptureRetryConfig create_memory_retry_config = 2;
+  CaptureRetryConfig asset_upload_retry_config = 3;
+  CaptureRetryConfig delete_memory_retry_config = 4;
+}
+
+message CaptureRetryConfig {
+  int32 max_retries = 1;
+  int32 initial_delay_ms = 2;
+  float backoff_multiplier = 3;
+}
+
+// ─── GetFoodLogSummary ──────────────────────────────────────────────
+
+message GetFoodLogSummaryRequest {
+  google.protobuf.Timestamp start_time = 1;
+}
+
+message GetFoodLogSummaryResponse {
+  humane.common.encryption.EncryptedData food_log_summary = 1;
+}
+
+// ─── Share Links ────────────────────────────────────────────────────
+
+message GetShareLinkRequest {
+  string memory_uuid = 1;
+}
+
+message GetShareLinkResponse {
+  string share_link = 1;
+}
+
+message GetShareLinkContentsRequest {
+  ShareLinkData share_link_data = 1;
+}
+
+message GetShareLinkContentsResponse {
+  bytes decrypted_thumbnail_bytes = 1;
+}
+
+message SaveSharedMemoryRequest {
+  string memory_uuid = 1 [deprecated = true];
+  string signature = 2 [deprecated = true];
+  int64 expiry = 3 [deprecated = true];
+  ShareLinkData share_link_data = 4;
+}
+
+message SaveSharedMemoryResponse {
+  string created_memory_uuid = 1;
+}
+
+message ShareLinkData {
+  string memory_uuid = 1;
+  string signature = 2;
+  int64 expiry = 3;
+}
+
+// ─── DeclareMemoryCreateIntent ──────────────────────────────────────
+
+message MemoryCreateIntentRequest {
+  string device_local_id = 1;
+  MemoryType memory_type = 2;
+  DelayReason delay_reason = 3;
+}
+
+message MemoryCreateIntentResponse {}
+
+enum DelayReason {
+  DELAY_REASON_UNSPECIFIED = 0;
+  DELAY_REASON_POOR_NETWORK = 1;
+}
+
+// ─── Notes (used by TestingAutomationService, included for completeness) ─
+
+message Note {
+  int64 note_id = 1 [deprecated = true];
+  string text = 2;
+  bool deleted = 3;
+  google.protobuf.Timestamp modified_at = 4;
+  string title = 5;
+  bool completed = 6;
+  google.protobuf.Timestamp reminder_time = 7;
+  int64 device_local_id = 8;
+  string audio_file_name = 9;
+  int64 memory_id = 10 [deprecated = true];
+  string memory_uuid = 11;
+  string note_uuid = 12;
+  repeated string tags = 13;
+}
+
+message Tag {
+  string text = 1;
+}

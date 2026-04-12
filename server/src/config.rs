@@ -9,6 +9,8 @@ pub struct Config {
     pub llm: LlmConfig,
     #[serde(default)]
     pub server: ServerConfig,
+    #[serde(default)]
+    pub storage: StorageConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -34,12 +36,23 @@ pub struct ServerConfig {
     #[serde(default = "default_port")]
     pub port: u16,
 
+    /// Public address the device will use to reach this server (e.g. "192.168.1.125:9090").
+    /// Used for constructing upload URLs. Falls back to the bind address if not set.
+    pub public_addr: Option<String>,
+
     /// System prompt sent to the LLM.
     #[serde(default = "default_system_prompt")]
     pub system_prompt: String,
 
     /// Display name shown during onboarding welcome screen.
     pub display_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StorageConfig {
+    /// Directory for storing captured media files.
+    #[serde(default = "default_media_dir")]
+    pub media_dir: String,
 }
 
 // --- defaults ---
@@ -60,6 +73,10 @@ fn default_system_prompt() -> String {
     "You are a helpful assistant running on a Humane AI Pin. Keep responses concise - they will be displayed on a laser projector and spoken aloud.".into()
 }
 
+fn default_media_dir() -> String {
+    "./media".into()
+}
+
 impl Default for LlmConfig {
     fn default() -> Self {
         Self {
@@ -75,8 +92,17 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             port: default_port(),
+            public_addr: None,
             system_prompt: default_system_prompt(),
             display_name: None,
+        }
+    }
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            media_dir: default_media_dir(),
         }
     }
 }
@@ -94,6 +120,7 @@ impl Config {
             Ok(Config {
                 llm: LlmConfig::default(),
                 server: ServerConfig::default(),
+                storage: StorageConfig::default(),
             })
         }
     }

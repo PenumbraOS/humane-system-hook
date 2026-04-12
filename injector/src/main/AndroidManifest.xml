@@ -4,11 +4,30 @@
     android:sharedUserId="android.uid.system"
     tools:ignore="Deprecated">
 
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <application
         android:allowBackup="false"
         android:label="PenumbraHookInjector"
         android:process="system">
 
+        <!-- Auto-inject at boot. Priority 999 ensures we run before Humane's
+             own boot receivers (GrandCentralBootReceiver, etc.) so PMS is
+             mutated before ironman's process is ever forked. -->
+        <receiver
+            android:name=".BootInjectionReceiver"
+            android:process="system"
+            android:directBootAware="true"
+            android:exported="true">
+            <intent-filter android:priority="999">
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+            </intent-filter>
+            <intent-filter android:priority="999">
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Manual injection trigger (kept for development/debugging) -->
         <receiver
             android:name=".InjectReceiver"
             android:process="system"

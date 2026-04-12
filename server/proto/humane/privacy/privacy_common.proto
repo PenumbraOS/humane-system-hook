@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+package humane.privacy.grpc.common;
+
+// ─── Enums ──────────────────────────────────────────────────────────
+
+enum KeyState {
+  KEY_UNSPECIFIED    = 0;
+  KEY_FAILURE        = 1;
+  KEY_EXISTS         = 2;
+  KEY_NOT_FOUND      = 3;
+  KEY_INVALID        = 4;
+  KEY_MANAGER_UNKNOWN = 5;
+  KEY_LABEL_UNKNOWN  = 6;
+  KEY_SUCCESS        = 7;
+  KEY_IMPORTED       = 8;
+  KEY_UPDATED        = 9;
+  KEY_REMOVED        = 10;
+  KEY_CREATED        = 11;
+}
+
+enum SettingState {
+  SETTING_UNSPECIFIED = 0;
+  SETTING_FAILURE    = 1;
+  SETTING_INVALID    = 2;
+  SETTING_UNKNOWN    = 3;
+  SETTING_SUCCESS    = 4;
+  SETTING_UPDATED    = 5;
+}
+
+// ─── Shared messages ────────────────────────────────────────────────
+
+message KeyStateResponse {
+  bytes    kid    = 1;
+  KeyState status = 2;
+}
+
+message SettingStateResponse {
+  string       name   = 1;
+  SettingState status = 2;
+}
+
+message PrivacySetting {
+  string name  = 1;
+  string value = 2;
+}
+
+message PrivacySettingInfo {
+  string       name   = 1;
+  SettingState status = 2;
+  string       value  = 3;
+}
+
+message ClientKeyAttributes {
+  string          manager       = 1;
+  bool            private       = 2;
+  repeated string client_labels = 3;
+}
+
+message EphemeralKeyAttributes {
+  string channel = 1;
+}

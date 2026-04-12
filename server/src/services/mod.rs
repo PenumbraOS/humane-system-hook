@@ -1,7 +1,9 @@
 pub mod aibus;
+pub mod capture;
 pub mod contacts;
 pub mod events;
 pub mod featureflags;
+pub mod privacy;
 pub mod provisioning;
 pub mod pushrelay;
 pub mod user_info;

@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package humane.common.encryption;
+
+option java_multiple_files = true;
+
+message EncryptionInformation {
+  string kid = 1;
+}
+
+message EncryptedData {
+  EncryptionInformation encryption_information = 1;
+  bytes data = 2;
+}
+
+// Location envelope — normally encrypted inside EncryptedData.data,
+// but with the encryption bypass hook active, it arrives as plaintext
+// serialized proto bytes.
+message LocationEnvelope {
+  double longitude = 1;
+  double latitude = 2;
+  float accuracy = 3;
+  string human_readable = 4;
+  string full_address = 5;
+  LocationStaleStatus stale_status = 6;
+  int64 timestamp = 7;
+}
+
+enum LocationStaleStatus {
+  UNDEFINED = 0;
+  STALE = 1;
+  NOT_STALE = 2;
+}

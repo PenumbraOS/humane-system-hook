@@ -9,46 +9,38 @@ import de.robv.android.xposed.XposedBridge
 import java.security.cert.X509Certificate
 
 /**
- * Hooks for ironman's gRPC infrastructure.
+ * Hooks for ironman.
  *
- * Active interception: redirects all gRPC traffic to a local mock server
- * by hooking ChannelFactory.getGatewayUri() to return our server address.
- * Using a non-443 port triggers usePlaintext() in ChannelFactory — no TLS needed.
  *
- * Also patches credential manager methods that crash with NPE when device
- * certificates are missing from the hardware keystore.
- *
- * Also hooks all other ChannelFactory methods for debug logging.
+ * Ordering requirement: [hookCredentialManager] MUST run before
+ * [ChannelFactoryBypass.install] — without it, ironman crash-loops
+ * due to missing device certificates before any gRPC redirect fires.
  */
 object IronmanHooks {
 
     private const val TAG = "PenumbraHook"
 
-    /**
-     * Mock server address. The non-443 port triggers usePlaintext() in
-     * ChannelFactory.newChannel(), bypassing TLS/mTLS entirely.
-     */
-    private const val MOCK_SERVER_URI = "192.168.1.125:9090"
-
-    private val CHANNEL_FACTORY_CLASSES = listOf(
-        "humaneinternal.system.network.ChannelFactory",
-        "humane.grandcentral.network.ChannelFactory",
-    )
-
     fun install(cl: ClassLoader) {
         Log.i(TAG, "Installing ironman hooks...")
-        Log.i(TAG, "  Mock server: $MOCK_SERVER_URI")
+        Log.i(TAG, "  Mock server: ${ChannelFactoryBypass.MOCK_SERVER_URI}")
 
         // Credential hooks must be installed first — without these, ironman
         // crash-loops before ChannelFactory hooks ever get a chance to run.
         hookCredentialManager(cl)
 
-        for (className in CHANNEL_FACTORY_CLASSES) {
-            hookChannelFactory(cl, className)
-        }
+        // Redirect all gRPC traffic to mock server
+        ChannelFactoryBypass.install(cl)
 
         // Hook DAC signature generation as a safety net
         hookDacSignature(cl)
+
+        // Encryption bypass: make all data protection calls return plaintext
+        hookDataProtector(cl)
+
+        // Ephemeral encryption bypass: short-circuit prepare(), make encrypt/decrypt
+        // pass plaintext through EncryptedData envelopes so the mock server can
+        // read encrypted RPC endpoints (weather, nearby, chat, etc.) in the clear.
+        EphemeralProtectionBypass.install(cl)
 
         // Provisioning state fix: only force NORMAL mode and DUC_PROVISIONED=1
         // if onboarding has already completed. On a fresh device, leave these
@@ -122,63 +114,6 @@ object IronmanHooks {
         } catch (t: Throwable) {
             Log.e(TAG, "  Failed to hook getPrivateKey: ${t.message}")
         }
-    }
-
-    private fun hookChannelFactory(cl: ClassLoader, className: String) {
-        val clazz = try {
-            cl.loadClass(className)
-        } catch (e: ClassNotFoundException) {
-            Log.w(TAG, "  $className not found, skipping")
-            return
-        }
-
-        // Discovery: log all declared methods so we can identify hook targets
-        val methods = clazz.declaredMethods
-        Log.i(TAG, "  $className has ${methods.size} declared methods:")
-        for (m in methods) {
-            val params = m.parameterTypes.joinToString(", ") { it.simpleName }
-            Log.i(TAG, "    ${m.name}($params) -> ${m.returnType.simpleName}")
-        }
-
-        // Hook every declared method for full visibility + active interception
-        var hooked = 0
-        for (method in methods) {
-            try {
-                method.isAccessible = true
-                val methodName = method.name
-                val paramTypes = method.parameterTypes.map { it.simpleName }
-
-                XposedBridge.hookMethod(method, object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        Log.i(TAG, ">>> $className.$methodName($paramTypes)")
-                        Log.i(TAG, "    thread=${Thread.currentThread().name}")
-                        param.args?.forEachIndexed { i, arg ->
-                            Log.i(TAG, "    arg[$i]=${HookUtils.summarizeArg(arg)}")
-                        }
-                    }
-
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        // Active interception: redirect getGatewayUri() to mock server
-                        if (methodName == "getGatewayUri" && param.throwable == null) {
-                            val original = param.result
-                            param.result = MOCK_SERVER_URI
-                            Log.i(TAG, "<<< $className.$methodName() REDIRECTED: $original -> $MOCK_SERVER_URI")
-                            return
-                        }
-
-                        if (param.throwable != null) {
-                            Log.i(TAG, "<<< $className.$methodName() threw: ${param.throwable}")
-                        } else {
-                            Log.i(TAG, "<<< $className.$methodName() -> ${HookUtils.summarizeArg(param.result)}")
-                        }
-                    }
-                })
-                hooked++
-            } catch (t: Throwable) {
-                Log.e(TAG, "  Failed to hook ${method.name}: ${t.message}")
-            }
-        }
-        Log.i(TAG, "  Hooked $hooked/${methods.size} methods on $className")
     }
 
     /**
@@ -326,6 +261,13 @@ object IronmanHooks {
             Log.e(TAG, "  setBaselineMode failed: ${t.javaClass.simpleName}: ${t.message}")
             // Non-fatal — device continues with whatever mode it had
         }
+    }
+
+    /**
+     * Bypass Krypton data protection so all captured data arrives as plaintext.
+     */
+    private fun hookDataProtector(cl: ClassLoader) {
+        DataProtectorBypass.install(cl)
     }
 
     /**
