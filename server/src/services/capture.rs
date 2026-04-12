@@ -27,8 +27,8 @@ fn decode_location(encrypted: &Option<common::EncryptedData>) -> Option<Location
     let enc = encrypted.as_ref()?;
     let envelope = common::LocationEnvelope::decode(enc.data.as_ref()).ok()?;
     Some(Location {
-        latitude: envelope.latitude,
-        longitude: envelope.longitude,
+        latitude: envelope.latitude as f64,
+        longitude: envelope.longitude as f64,
         accuracy: if envelope.accuracy != 0.0 {
             Some(envelope.accuracy)
         } else {

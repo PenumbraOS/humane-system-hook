@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package humane.common.encryption;
 
+import "google/protobuf/timestamp.proto";
+
 option java_multiple_files = true;
 
 message EncryptionInformation {
@@ -17,13 +19,13 @@ message EncryptedData {
 // but with the encryption bypass hook active, it arrives as plaintext
 // serialized proto bytes.
 message LocationEnvelope {
-  double longitude = 1;
-  double latitude = 2;
-  float accuracy = 3;
-  string human_readable = 4;
-  string full_address = 5;
-  LocationStaleStatus stale_status = 6;
-  int64 timestamp = 7;
+  float longitude = 1;
+  float latitude = 2;
+  string human_readable = 3;
+  string full_address = 4;
+  LocationStaleStatus stale_status = 5;
+  google.protobuf.Timestamp timestamp = 6;
+  float accuracy = 7;
 }
 
 enum LocationStaleStatus {
