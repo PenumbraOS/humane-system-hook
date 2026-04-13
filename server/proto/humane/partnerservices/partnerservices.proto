@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package humane.partnerservices;
+
+import "humane/common/encryption.proto";
+
+option java_multiple_files = true;
+
+service PartnerTokenRPCService {
+  rpc GetToken(DeviceUserAccessTokenRequest) returns (DeviceUserAccessTokenResponse);
+  rpc GetTokens(DeviceUserAccessTokenRequest) returns (MultipleDeviceUserAccessTokenResponse);
+}
+
+message DeviceUserAccessTokenRequest {
+  string provider_name = 1;
+}
+
+message DeviceUserAccessTokenResponse {
+  oneof access_token {
+    AccessToken long_lived_encrypted_access_token = 1;
+    humane.common.encryption.EncryptedData short_lived_encrypted_access_token = 2;
+  }
+}
+
+message MultipleDeviceUserAccessTokenResponse {
+  repeated DeviceUserAccessTokenResponse tokens = 1;
+}
+
+message AccessToken {
+  string account_id = 1;
+  string access_token = 2;
+  string unique_provider_account_id = 3;
+}

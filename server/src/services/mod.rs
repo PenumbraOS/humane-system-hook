@@ -3,6 +3,7 @@ pub mod capture;
 pub mod contacts;
 pub mod events;
 pub mod featureflags;
+pub mod partnerservices;
 pub mod privacy;
 pub mod provisioning;
 pub mod pushrelay;

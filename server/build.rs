@@ -13,6 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/humane/provisioning/provisioning.proto",
                 "proto/humane/capture/capture.proto",
                 "proto/humane/common/encryption.proto",
+                "proto/humane/partnerservices/partnerservices.proto",
                 "proto/humane/privacy/privacy.proto",
                 "proto/humane/privacy/privacy_common.proto",
             ],

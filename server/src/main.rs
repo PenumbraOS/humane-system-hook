@@ -37,6 +37,9 @@ mod proto {
     pub mod capture {
         tonic::include_proto!("humane.capture");
     }
+    pub mod partnerservices {
+        tonic::include_proto!("humane.partnerservices");
+    }
     pub mod common {
         pub mod encryption {
             tonic::include_proto!("humane.common.encryption");
@@ -69,6 +72,7 @@ use proto::capture::capture_service_server::CaptureServiceServer;
 use proto::contacts::contacts_rpc_service_server::ContactsRpcServiceServer;
 use proto::events::events_ingest_service_server::EventsIngestServiceServer;
 use proto::featureflags::feature_flags_service_server::FeatureFlagsServiceServer;
+use proto::partnerservices::partner_token_rpc_service_server::PartnerTokenRpcServiceServer;
 use proto::privacy::pub_::public_privacy_service_server::PublicPrivacyServiceServer;
 use proto::provisioning::device_onboarding_dac_service_server::DeviceOnboardingDacServiceServer;
 use proto::pushrelay::push_relay_service_server::PushRelayServiceServer;
@@ -78,6 +82,7 @@ use services::capture::CaptureServiceImpl;
 use services::contacts::ContactsRpcServiceImpl;
 use services::events::EventsIngestServiceImpl;
 use services::featureflags::FeatureFlagsServiceImpl;
+use services::partnerservices::PartnerServicesImpl;
 use services::privacy::PublicPrivacyServiceImpl;
 use services::provisioning::{OnboardingCa, ProvisioningServiceImpl};
 use services::pushrelay::PushRelayServiceImpl;
@@ -314,6 +319,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         server_addr: public_addr.clone(),
     }))
     .add_service(PublicPrivacyServiceServer::new(PublicPrivacyServiceImpl))
+    .add_service(PartnerTokenRpcServiceServer::new(PartnerServicesImpl))
     .into_axum_router()
     .layer(axum::middleware::from_fn(log_grpc_unimplemented));
 
