@@ -236,10 +236,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = Config::load(&config_path)?;
 
+    let http_client = reqwest::Client::builder()
+        .tls_backend_native()
+        .build()?;
+
     // Build LLM agent (behind RwLock for hot-reload)
     let agent = Arc::new(LlmAgent::from_config(
         &config.llm,
         &config.server.system_prompt,
+        http_client.clone(),
     )?);
     let shared_agent = Arc::new(RwLock::new(agent));
 
@@ -247,7 +252,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pirate_weather_api_key = config.weather.resolve_api_key();
     let has_weather_key = pirate_weather_api_key.is_some();
     let shared_weather_key = Arc::new(RwLock::new(pirate_weather_api_key));
-    let http_client = reqwest::Client::new();
 
     // Generate ephemeral CA for signing DUC certificates during onboarding
     let onboarding_ca = Arc::new(OnboardingCa::generate()?);
@@ -329,7 +333,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         agent: shared_agent.clone(),
         pirate_weather_api_key: shared_weather_key.clone(),
         nearby_client: nearby::NearbyClient::new(http_client.clone()),
-        http_client,
+        http_client: http_client.clone(),
         db: database,
     }))
     .dedup::<AiBus>("EncryptedWeather", Duration::from_secs(300))
@@ -375,6 +379,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config_path,
         shared_config,
         shared_agent,
+        http_client: http_client.clone(),
         shared_weather_key,
     };
 

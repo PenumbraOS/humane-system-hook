@@ -12,6 +12,7 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, put};
 use axum::{Json, Router};
+use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn};
@@ -34,6 +35,8 @@ pub struct ApiState {
     pub shared_config: Arc<RwLock<Config>>,
     /// Hot-swappable LLM agent (shared with AiBusServiceImpl).
     pub shared_agent: Arc<RwLock<Arc<LlmAgent>>>,
+    /// Shared HTTP client for outbound requests.
+    pub http_client: HttpClient,
     /// Hot-swappable weather API key (shared with AiBusServiceImpl).
     pub shared_weather_key: Arc<RwLock<Option<String>>>,
 }
@@ -395,8 +398,12 @@ async fn update_settings(
     if llm_changed || system_prompt_changed {
         // Build the agent (sync) and convert the error to String immediately
         // so that Box<dyn Error> (which isn't Send) doesn't live across .await.
-        let agent_result = LlmAgent::from_config(&config.llm, &config.server.system_prompt)
-            .map_err(|e| e.to_string());
+        let agent_result = LlmAgent::from_config(
+            &config.llm,
+            &config.server.system_prompt,
+            state.http_client.clone(),
+        )
+        .map_err(|e| e.to_string());
 
         match agent_result {
             Ok(new_agent) => {

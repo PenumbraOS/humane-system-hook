@@ -1,5 +1,6 @@
 use std::fmt::Display;
 
+use reqwest::Client as HttpClient;
 use rig::completion::message::{ImageMediaType, Message, UserContent};
 use rig::prelude::*; // imports CompletionClient trait for .agent()
 use rig::providers;
@@ -84,6 +85,7 @@ impl LlmAgent {
     pub fn from_config(
         config: &LlmConfig,
         system_prompt: &str,
+        http_client: HttpClient,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let provider = config.provider.to_lowercase();
         info!(provider = %provider, model = %config.model, "constructing LLM agent");
@@ -97,7 +99,10 @@ impl LlmAgent {
                 let api_key = config.resolve_api_key().ok_or(
                     "Gemini api_key not set; configure GEMINI_API_KEY in the environment or .env, or set llm.api_key in config.toml",
                 )?;
-                let client = providers::gemini::Client::new(&api_key)?;
+                let client = providers::gemini::Client::builder()
+                    .api_key(&api_key)
+                    .http_client(http_client.clone())
+                    .build()?;
                 let agent = client
                     .agent(&config.model)
                     .preamble(system_prompt)
@@ -109,7 +114,10 @@ impl LlmAgent {
                 let api_key = config.resolve_api_key().ok_or(
                     "Anthropic api_key not set; configure ANTHROPIC_API_KEY in the environment or .env, or set llm.api_key in config.toml",
                 )?;
-                let client = providers::anthropic::Client::new(&api_key)?;
+                let client = providers::anthropic::Client::builder()
+                    .api_key(&api_key)
+                    .http_client(http_client.clone())
+                    .build()?;
                 let agent = client
                     .agent(&config.model)
                     .preamble(system_prompt)
@@ -121,14 +129,13 @@ impl LlmAgent {
                 let api_key = config.resolve_api_key().ok_or(
                     "OpenAI api_key not set; configure OPENAI_API_KEY in the environment or .env, or set llm.api_key in config.toml",
                 )?;
-                let client = if let Some(ref base_url) = config.base_url {
-                    providers::openai::CompletionsClient::builder()
-                        .api_key(&api_key)
-                        .base_url(base_url)
-                        .build()?
-                } else {
-                    providers::openai::CompletionsClient::new(&api_key)?
-                };
+                let mut builder = providers::openai::CompletionsClient::builder()
+                    .api_key(&api_key)
+                    .http_client(http_client);
+                if let Some(ref base_url) = config.base_url {
+                    builder = builder.base_url(base_url);
+                }
+                let client = builder.build()?;
                 let agent = client
                     .agent(&config.model)
                     .preamble(system_prompt)
