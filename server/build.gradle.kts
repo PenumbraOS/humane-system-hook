@@ -8,7 +8,6 @@ plugins {
 
 val rustAbi = "arm64-v8a"
 val rustTarget = "aarch64-linux-android"
-val rustApiLevel = 28
 val rustExecutableName = "humane-server"
 val packagedRustLibraryName = "libpenumbra_server_android.so"
 val rustProjectDir = rootProject.layout.projectDirectory.dir("server-rs")
@@ -19,7 +18,7 @@ val buildRustServerAndroid by tasks.registering(Exec::class) {
     group = "build"
     description = "Builds the Rust server for Android arm64."
     workingDir = rustProjectDir.asFile
-    commandLine("cargo", "ndk", "-t", rustAbi, "-p", rustApiLevel.toString(), "build", "--release")
+    commandLine("cargo", "ndk", "-t", rustAbi, "build", "--release")
 
     inputs.files(
         fileTree(rustProjectDir.asFile) {
