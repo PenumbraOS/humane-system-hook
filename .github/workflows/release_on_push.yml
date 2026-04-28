@@ -45,6 +45,9 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk
 
+      - name: Bootstrap Aliuhook local Maven repo
+        run: ./scripts/bootstrap-aliuhook.sh
+
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 

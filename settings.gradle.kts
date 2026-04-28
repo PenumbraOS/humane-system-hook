@@ -8,9 +8,12 @@ pluginManagement {
 
 dependencyResolutionManagement {
     repositories {
+        maven { url = uri(rootDir.resolve(".ci/m2")) }
+        mavenLocal()
         google()
         mavenCentral()
-        maven { url = uri("https://maven.aliucord.com/releases") }
+        // Disabled due to being down
+        // maven { url = uri("https://maven.aliucord.com/releases") }
     }
 }
 
