@@ -54,11 +54,6 @@ android {
         }
     }
 
-    lint {
-        // We target API 32 (Android 12L on the Humane AI Pin) and sideload — not going to Play Store
-        disable += "ExpiredTargetSdkVersion"
-    }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
@@ -66,6 +61,10 @@ android {
 
     kotlinOptions {
         jvmTarget = "11"
+    }
+
+    lint {
+        disable += "ExpiredTargetSdkVersion"
     }
 }
 

@@ -42,6 +42,10 @@ android {
     kotlinOptions {
         jvmTarget = "11"
     }
+
+    lint {
+        disable += "ExpiredTargetSdkVersion"
+    }
 }
 
 dependencies {
