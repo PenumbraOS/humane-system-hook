@@ -1,6 +1,7 @@
 package com.penumbraos.server
 
 import android.content.Context
+import android.os.Environment
 import android.util.Log
 import java.io.File
 
@@ -13,13 +14,13 @@ object BootstrapConfig {
     private const val DB_FILE_NAME = "penumbra.db"
     private const val STORAGE_MEDIA_PLACEHOLDER = "__APP_MEDIA_DIR__"
     private const val STORAGE_DB_PLACEHOLDER = "__APP_DB_PATH__"
+    private const val PERSISTENT_ROOT_DIR_NAME = "PenumbraOS"
 
     fun ensureCanonicalConfig(context: Context): String {
-        val externalRoot = context.getExternalFilesDir(null)
-            ?: throw IllegalStateException("External files dir unavailable")
+        val externalRoot = File(Environment.getExternalStorageDirectory(), PERSISTENT_ROOT_DIR_NAME)
 
         check(externalRoot.exists() || externalRoot.mkdirs()) {
-            "Failed to create external files dir at ${externalRoot.absolutePath}"
+            "Failed to create persistent storage dir at ${externalRoot.absolutePath}"
         }
 
         val configFile = File(externalRoot, CONFIG_FILE_NAME)
