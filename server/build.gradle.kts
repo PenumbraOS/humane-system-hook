@@ -14,12 +14,16 @@ val rustProjectDir = rootProject.layout.projectDirectory.dir("server-rs")
 val rustTargetBinary = rustProjectDir.file("target/$rustTarget/release/$rustExecutableName")
 val generatedJniLibsDir = layout.buildDirectory.dir("generated/jniLibs/main")
 
+val androidVersionName = project.findProperty("versionName") as String? ?: "1.0"
+
 val buildRustServerAndroid by tasks.registering(Exec::class) {
     group = "build"
     description = "Builds the Rust server for Android arm64."
     workingDir = rustProjectDir.asFile
     commandLine("cargo", "ndk", "-t", rustAbi, "build", "--release")
+    environment("PENUMBRA_VERSION", androidVersionName)
 
+    inputs.property("penumbraVersion", androidVersionName)
     inputs.files(
         fileTree(rustProjectDir.asFile) {
             exclude("target/**")
@@ -68,7 +72,7 @@ android {
         minSdk = 31
         targetSdk = 32
         versionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 1
-        versionName = project.findProperty("versionName") as String? ?: "1.0"
+        versionName = androidVersionName
 
         ndk {
             abiFilters += "arm64-v8a"

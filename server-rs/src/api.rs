@@ -78,8 +78,19 @@ pub fn router(state: ApiState) -> Router {
 
 // ─── Health ─────────────────────────────────────────────────────────
 
-async fn health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "status": "ok" }))
+async fn health(State(state): State<ApiState>) -> Json<serde_json::Value> {
+    let config = state.shared_config.read().await;
+    let name = config
+        .server
+        .display_name
+        .clone()
+        .unwrap_or_else(|| "Penumbra".into());
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "name": name,
+        "version": env!("PENUMBRA_VERSION"),
+    }))
 }
 
 // ─── Memories ───────────────────────────────────────────────────────
