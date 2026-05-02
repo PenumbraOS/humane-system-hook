@@ -13,3 +13,6 @@ media_dir = "__APP_MEDIA_DIR__"
 db_path = "__APP_DB_PATH__"
 
 [weather]
+
+[logging]
+log_dir = "__APP_LOG_DIR__"

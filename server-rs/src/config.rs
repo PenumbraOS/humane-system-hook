@@ -13,6 +13,8 @@ pub struct Config {
     pub storage: StorageConfig,
     #[serde(default)]
     pub weather: WeatherConfig,
+    #[serde(default)]
+    pub logging: LoggingConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -70,6 +72,39 @@ pub struct StorageConfig {
 pub struct WeatherConfig {
     /// PirateWeather API key. If not set, weather requests return "unavailable".
     pub pirate_weather_api_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct LoggingConfig {
+    /// Directory where rolling log files are written. If empty/None, no file
+    /// appender is installed and `/api/logs/server` will return 503.
+    pub log_dir: Option<String>,
+
+    /// File-name prefix for rolled log files (suffix is `YYYY-MM-DD`).
+    #[serde(default = "default_log_file_prefix")]
+    pub file_prefix: String,
+
+    /// How many rolled files to retain on disk.
+    #[serde(default = "default_log_max_files")]
+    pub max_files: usize,
+}
+
+fn default_log_file_prefix() -> String {
+    "humane-server".into()
+}
+
+fn default_log_max_files() -> usize {
+    7
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            log_dir: None,
+            file_prefix: default_log_file_prefix(),
+            max_files: default_log_max_files(),
+        }
+    }
 }
 
 // --- defaults ---
@@ -161,6 +196,7 @@ impl Config {
                 server: ServerConfig::default(),
                 storage: StorageConfig::default(),
                 weather: WeatherConfig::default(),
+                logging: LoggingConfig::default(),
             }
         };
 

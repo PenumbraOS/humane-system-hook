@@ -213,18 +213,6 @@ async fn log_grpc_unimplemented(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let env_filter =
-        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
-    #[cfg(target_os = "android")]
-    tracing_subscriber::fmt()
-        .with_env_filter(env_filter)
-        .with_ansi(false)
-        .compact()
-        .without_time()
-        .init();
-    #[cfg(not(target_os = "android"))]
-    tracing_subscriber::fmt().with_env_filter(env_filter).init();
-
     // Locate config file: check --config <path>, then ./config.toml, then next to binary
     let config_path = std::env::args()
         .position(|a| a == "--config")
@@ -235,6 +223,61 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     load_dotenv(&config_path);
 
     let config = Config::load(&config_path)?;
+
+    let env_filter =
+        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
+
+    // Optional rolling file appender, used both for persistence and for the
+    // `/api/logs/server` REST endpoint. The guard must outlive the program;
+    // we leak it intentionally.
+    let file_layer = if let Some(dir) = config.logging.log_dir.as_deref() {
+        match std::fs::create_dir_all(dir) {
+            Ok(()) => {
+                let appender = tracing_appender::rolling::Builder::new()
+                    .rotation(tracing_appender::rolling::Rotation::DAILY)
+                    .filename_prefix(&config.logging.file_prefix)
+                    .max_log_files(config.logging.max_files)
+                    .build(dir)
+                    .map_err(|e| format!("failed to build rolling log appender: {e}"))?;
+                let (nb, guard) = tracing_appender::non_blocking(appender);
+                Box::leak(Box::new(guard));
+                Some(
+                    tracing_subscriber::fmt::layer()
+                        .with_writer(nb)
+                        .with_ansi(false)
+                        .with_target(true),
+                )
+            }
+            Err(e) => {
+                eprintln!(
+                    "warning: failed to create log_dir {:?}: {}. file logging disabled",
+                    dir, e
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    {
+        use tracing_subscriber::layer::SubscriberExt;
+        use tracing_subscriber::util::SubscriberInitExt;
+
+        #[cfg(target_os = "android")]
+        let stdout_layer = tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .compact()
+            .without_time();
+        #[cfg(not(target_os = "android"))]
+        let stdout_layer = tracing_subscriber::fmt::layer();
+
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(stdout_layer)
+            .with(file_layer)
+            .init();
+    }
 
     let http_client = reqwest::Client::builder()
         .tls_backend_native()
@@ -320,6 +363,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("  - PUT /upload/:uuid/:filename (HTTP media upload)");
     info!("  - GET /api/* (REST API for web portal)");
     info!("  - GET /api/events (NDJSON event stream)");
+    info!("  - GET /api/logs/server (rolling log file dump)");
+    info!("  - GET /api/logs/logcat (Android only)");
     info!("  - All other RPCs: UNIMPLEMENTED");
     info!("============================================================");
 
@@ -327,6 +372,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Shared config for hot-reload via the web portal
     let shared_config = Arc::new(RwLock::new(config.clone()));
+
+    // Capture logging settings for the API state before `config` is moved.
+    let log_dir_for_api: Option<PathBuf> = config
+        .logging
+        .log_dir
+        .as_ref()
+        .map(PathBuf::from);
+    let log_file_prefix_for_api: String = config.logging.file_prefix.clone();
 
     // Build the gRPC service stack as a native axum::Router.
     let grpc_router = DedupRouter::new(AiBusServiceServer::new(AiBusServiceImpl {
@@ -381,6 +434,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         shared_agent,
         http_client: http_client.clone(),
         shared_weather_key,
+        log_dir: log_dir_for_api,
+        log_file_prefix: log_file_prefix_for_api,
     };
 
     // CORS layer for the web portal (public HTTPS → local HTTP via LNA).

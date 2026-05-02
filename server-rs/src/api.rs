@@ -39,6 +39,10 @@ pub struct ApiState {
     pub http_client: HttpClient,
     /// Hot-swappable weather API key (shared with AiBusServiceImpl).
     pub shared_weather_key: Arc<RwLock<Option<String>>>,
+    /// Directory where rolling log files are written, if file logging is enabled.
+    pub log_dir: Option<PathBuf>,
+    /// File-name prefix for rolling log files.
+    pub log_file_prefix: String,
 }
 
 // ─── Event types for the streaming endpoint ─────────────────────────
@@ -73,6 +77,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/settings", get(get_settings))
         .route("/api/settings", put(update_settings))
         .route("/api/events", get(event_stream))
+        .route("/api/logs/server", get(get_server_logs))
+        .route("/api/logs/logcat", get(get_logcat_logs))
         .with_state(state)
 }
 
@@ -638,4 +644,177 @@ async fn event_stream(State(state): State<ApiState>) -> Response {
         .header(header::CACHE_CONTROL, "no-cache")
         .body(body)
         .unwrap()
+}
+
+// ─── Logs ───────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct LogQuery {
+    /// Optional cap on returned lines (tail of the log). 0 / unset = all.
+    #[serde(default)]
+    pub lines: Option<usize>,
+    /// If true (default), concatenate all rolled files in chronological order.
+    /// If false, only return the most recent file.
+    #[serde(default)]
+    pub all: Option<bool>,
+}
+
+/// GET /api/logs/server — returns the on-disk rolling log files as text/plain.
+///
+/// By default, all rolled files in `logging.log_dir` are concatenated in
+/// chronological order. Use `?lines=N` to return only the last N lines, or
+/// `?all=false` to read just the most recent file.
+async fn get_server_logs(
+    State(state): State<ApiState>,
+    axum::extract::Query(query): axum::extract::Query<LogQuery>,
+) -> Response {
+    let Some(log_dir) = state.log_dir.as_deref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "file logging is not configured (set logging.log_dir in config.toml)",
+        )
+            .into_response();
+    };
+
+    let prefix = state.log_file_prefix.as_str();
+
+    // Discover candidate files: `{prefix}*` in `log_dir`, sorted by name
+    // (rolling-file daily filenames are `{prefix}.YYYY-MM-DD`, lexicographically
+    // sorted == chronologically sorted).
+    let mut files: Vec<PathBuf> = match std::fs::read_dir(log_dir) {
+        Ok(rd) => rd
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.is_file()
+                    && p.file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.starts_with(prefix))
+                        .unwrap_or(false)
+            })
+            .collect(),
+        Err(e) => {
+            tracing::error!(dir = %log_dir.display(), error = %e, "failed to read log dir");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to read log dir: {e}"),
+            )
+                .into_response();
+        }
+    };
+    files.sort();
+
+    if files.is_empty() {
+        return (
+            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            String::new(),
+        )
+            .into_response();
+    }
+
+    let want_all = query.all.unwrap_or(true);
+    let selected: &[PathBuf] = if want_all {
+        &files
+    } else {
+        &files[files.len() - 1..]
+    };
+
+    // Read everything. Logs are typically small enough; large deployments
+    // should use ?lines=. We accept the memory cost for simplicity.
+    let mut buf = Vec::new();
+    for path in selected {
+        match tokio::fs::read(path).await {
+            Ok(mut bytes) => buf.append(&mut bytes),
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "failed to read log file");
+            }
+        }
+    }
+
+    let body = match query.lines {
+        Some(n) if n > 0 => tail_lines(&buf, n),
+        _ => buf,
+    };
+
+    (
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        body,
+    )
+        .into_response()
+}
+
+/// Return the last `n` lines from `bytes`. Operates on raw bytes to avoid
+/// requiring valid UTF-8 (logs may include arbitrary bytes).
+fn tail_lines(bytes: &[u8], n: usize) -> Vec<u8> {
+    if n == 0 || bytes.is_empty() {
+        return bytes.to_vec();
+    }
+    let mut count = 0usize;
+    // Walk from the end, counting newlines.
+    let mut idx = bytes.len();
+    while idx > 0 {
+        idx -= 1;
+        if bytes[idx] == b'\n' {
+            count += 1;
+            if count > n {
+                return bytes[idx + 1..].to_vec();
+            }
+        }
+    }
+    bytes.to_vec()
+}
+
+/// GET /api/logs/logcat — returns the device's full logcat buffer as text/plain.
+///
+/// Only available on Android. Returns 503 on other platforms. Uses
+/// `logcat -d` (dump-and-exit). Use `?lines=N` to tail the output.
+#[cfg(target_os = "android")]
+async fn get_logcat_logs(
+    axum::extract::Query(query): axum::extract::Query<LogQuery>,
+) -> Response {
+    use tokio::process::Command;
+
+    let output = match Command::new("logcat").args(["-d"]).output().await {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to spawn logcat");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to run logcat: {e}"),
+            )
+                .into_response();
+        }
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        tracing::warn!(status = ?output.status, %stderr, "logcat exited non-zero");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("logcat failed: {stderr}"),
+        )
+            .into_response();
+    }
+
+    let body = match query.lines {
+        Some(n) if n > 0 => tail_lines(&output.stdout, n),
+        _ => output.stdout,
+    };
+
+    (
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        body,
+    )
+        .into_response()
+}
+
+#[cfg(not(target_os = "android"))]
+async fn get_logcat_logs(
+    axum::extract::Query(_query): axum::extract::Query<LogQuery>,
+) -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "logcat is only available on Android",
+    )
+        .into_response()
 }
