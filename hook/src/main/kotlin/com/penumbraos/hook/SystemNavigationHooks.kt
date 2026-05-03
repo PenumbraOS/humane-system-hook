@@ -14,6 +14,8 @@ object SystemNavigationHooks {
 
         TcmSilencer.install(cl)
 
+        ConnectivityCheckBypass.install(cl)
+
         Log.i(TAG, "System navigation hooks installed")
     }
 }
