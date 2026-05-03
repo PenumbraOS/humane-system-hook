@@ -37,6 +37,7 @@ class HookComponentFactory : AppComponentFactory() {
             "system.PhotographyExperienceApplication" to PhotographyHooks::install,
             "humaneinternal.system.krypto.KryptoService" to KryptoHooks::install,
             "humane.experience.systemnavigation.SystemNavigationExperience" to SystemNavigationHooks::install,
+            "humane.experience.settings.SettingsExperience" to SettingsHooks::install,
             "humane.connectivity.esimlpa.factoryService" to EsimLpaHooks::install,
         )
     }
