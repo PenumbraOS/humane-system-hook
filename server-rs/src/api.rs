@@ -19,11 +19,13 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn};
 
 use crate::config::Config;
-use crate::esim::{EsimBridge, EsimRequestError, EsimRequestRecord, EsimSnapshot};
+use crate::esim::{CellularStatusError, DeviceToggleError, EsimBridge, EsimRequestError, EsimRequestRecord, EsimSnapshot};
 use crate::llm::LlmAgent;
 use crate::storage::{MediaStore, MemoryRecord};
 
 const ESIM_GETTER_TIMEOUT: Duration = Duration::from_secs(20);
+const CELLULAR_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
+const NETWORK_TOGGLE_TIMEOUT: Duration = Duration::from_secs(10);
 
 // ─── Shared state ───────────────────────────────────────────────────
 
@@ -83,6 +85,9 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/settings", get(get_settings))
         .route("/api/settings", put(update_settings))
         .route("/api/events", get(event_stream))
+        .route("/api/cellular/service-status", get(get_cellular_service_status))
+        .route("/api/cellular/set-enabled", put(set_cellular_enabled))
+        .route("/api/wifi/set-enabled", put(set_wifi_enabled))
         .route("/api/logs/server", get(get_server_logs))
         .route("/api/logs/logcat", get(get_logcat_logs))
         .route("/api/esim/state", get(get_esim_state))
@@ -311,8 +316,49 @@ struct EsimRequestAcceptedResponse {
     request_id: String,
 }
 
+#[derive(Deserialize)]
+struct SetEnabledRequest {
+    enabled: bool,
+}
+
 async fn get_esim_state(State(state): State<ApiState>) -> Json<EsimSnapshot> {
     Json(state.esim_bridge.snapshot().await)
+}
+
+async fn get_cellular_service_status(State(state): State<ApiState>) -> Response {
+    match state.esim_bridge.get_cellular_status(CELLULAR_STATUS_TIMEOUT).await {
+        Ok(event) => Json(event).into_response(),
+        Err(error) => {
+            warn!(error = ?error, "failed to fetch cellular service status");
+            cellular_status_error_response(error)
+        }
+    }
+}
+
+async fn set_cellular_enabled(
+    State(state): State<ApiState>,
+    Json(body): Json<SetEnabledRequest>,
+) -> Response {
+    match state.esim_bridge.set_cellular_enabled(body.enabled, NETWORK_TOGGLE_TIMEOUT).await {
+        Ok(event) => Json(event).into_response(),
+        Err(error) => {
+            warn!(error = ?error, enabled = body.enabled, "failed to toggle cellular data");
+            device_toggle_error_response(error)
+        }
+    }
+}
+
+async fn set_wifi_enabled(
+    State(state): State<ApiState>,
+    Json(body): Json<SetEnabledRequest>,
+) -> Response {
+    match state.esim_bridge.set_wifi_enabled(body.enabled, NETWORK_TOGGLE_TIMEOUT).await {
+        Ok(event) => Json(event).into_response(),
+        Err(error) => {
+            warn!(error = ?error, enabled = body.enabled, "failed to toggle Wi-Fi");
+            device_toggle_error_response(error)
+        }
+    }
 }
 
 async fn get_esim_request(
@@ -362,7 +408,7 @@ async fn esim_get_eid(State(state): State<ApiState>) -> Response {
         &state,
         "humane.connectivity.esimlpa.getEID",
         serde_json::json!({}),
-        &["esim.eid_result"],
+        &["esim.device_identifiers_result"],
     )
     .await
 }
@@ -481,6 +527,60 @@ fn esim_request_error_response(error: EsimRequestError) -> Response {
             Json(serde_json::json!({
                 "type": "esim.bridge_error",
                 "request_id": request_id,
+                "payload": {
+                    "message": message
+                }
+            })),
+        )
+            .into_response(),
+    }
+}
+
+fn cellular_status_error_response(error: CellularStatusError) -> Response {
+    match error {
+        CellularStatusError::BridgeError(event) => (StatusCode::BAD_GATEWAY, Json(event)).into_response(),
+        CellularStatusError::Timeout { request_id } => (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(serde_json::json!({
+                "type": "cellular.status_timeout",
+                "request_id": request_id,
+                "payload": {
+                    "message": "timed out waiting for cellular status"
+                }
+            })),
+        )
+            .into_response(),
+        CellularStatusError::Internal(message) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "type": "cellular.status_error",
+                "payload": {
+                    "message": message
+                }
+            })),
+        )
+            .into_response(),
+    }
+}
+
+fn device_toggle_error_response(error: DeviceToggleError) -> Response {
+    match error {
+        DeviceToggleError::BridgeError(event) => (StatusCode::BAD_GATEWAY, Json(event)).into_response(),
+        DeviceToggleError::Timeout { request_id } => (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(serde_json::json!({
+                "type": "device.toggle_timeout",
+                "request_id": request_id,
+                "payload": {
+                    "message": "timed out waiting for toggle result"
+                }
+            })),
+        )
+            .into_response(),
+        DeviceToggleError::Internal(message) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "type": "device.toggle_error",
                 "payload": {
                     "message": message
                 }

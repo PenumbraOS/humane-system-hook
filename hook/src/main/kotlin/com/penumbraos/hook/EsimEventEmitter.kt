@@ -60,6 +60,10 @@ object EsimEventEmitter {
         )
     }
 
+    fun emitDeviceIdentifier(key: String, value: String?) {
+        emitSyspropUpdate(key, value)
+    }
+
     fun emitProfileMutationResult(operation: String, result: String, message: String?) {
         emit(
             "esim.profile_mutation_result",

@@ -1,6 +1,9 @@
 package com.penumbraos.hook
 
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.telephony.TelephonyManager
 import android.util.Log
 import java.lang.reflect.Method
 import java.util.ArrayList
@@ -16,6 +19,7 @@ object EsimLpaHooks {
     private const val MAX_ITERATIONS = 200
     private const val PROTECTED_T_MOBILE_NAME = "t-mobile"
     private const val PROTECTED_GSMA_TEST_PREFIX = "gsma test profile"
+    private const val DEVICE_IDENTIFIER_IMEI_KEY = "humane.esim.IMEI"
 
     // Hex encoding of ASCII "Humane"
     private const val HUMANE_HEX = "48756D616E65"
@@ -171,6 +175,9 @@ object EsimLpaHooks {
             EsimOperationContext.currentNickname = intent?.getStringExtra("Nickname")
             EsimOperationContext.currentSource = intent?.getStringExtra("penumbra_source")
             EsimEventEmitter.emitActionStarted()
+            if (EsimOperationContext.currentAction == "humane.connectivity.esimlpa.getEID") {
+                emitImeiIdentifier(param.thisObject)
+            }
         }
 
         Log.w(TAG, "  eSIM action capture installed")
@@ -417,6 +424,48 @@ object EsimLpaHooks {
         HookUtils.hookMethodAfter(listenerClass, "onError", arrayOf(String::class.java)) { param ->
             val message = param.args[0] as? String
             EsimEventEmitter.emitDownloadResult("error", message)
+        }
+    }
+
+    private fun emitImeiIdentifier(factoryService: Any) {
+        try {
+            val context = factoryService.javaClass.getMethod("getApplicationContext").invoke(factoryService) as? android.content.Context
+                ?: return
+            val telephonyManager = context.getSystemService("phone") as? TelephonyManager
+            val imei = getCurrentImei(context, telephonyManager)
+            if (!imei.isNullOrBlank()) {
+                EsimEventEmitter.emitDeviceIdentifier(DEVICE_IDENTIFIER_IMEI_KEY, imei)
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "  Failed to emit IMEI identifier", t)
+        }
+    }
+
+    private fun getCurrentImei(context: android.content.Context, telephonyManager: TelephonyManager?): String? {
+        if (telephonyManager == null) return null
+        if (context.checkSelfPermission("android.permission.READ_PHONE_STATE") != PackageManager.PERMISSION_GRANTED) {
+            return null
+        }
+
+        return try {
+            val imei = if (Build.VERSION.SDK_INT >= 26) {
+                val tmWrapperClass = context.classLoader?.loadClass("es.com.valid.lib_lpa.cardCommunication.TMWrapper")
+                val slotIndex = tmWrapperClass?.getMethod("getSlotIndex")?.invoke(null) as? Int ?: -2
+                if (slotIndex == -2) {
+                    telephonyManager.imei
+                } else {
+                    telephonyManager.getImei(slotIndex)
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                telephonyManager.deviceId
+            }
+            imei?.let {
+                if (it.length % 2 == 1) "${it}F" else it
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "  Failed to read IMEI", t)
+            null
         }
     }
 

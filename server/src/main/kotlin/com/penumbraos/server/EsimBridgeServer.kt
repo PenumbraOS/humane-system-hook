@@ -1,6 +1,7 @@
 package com.penumbraos.server
 
 import android.content.Context
+import android.net.wifi.WifiManager
 import android.util.Log
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -136,6 +137,9 @@ object EsimBridgeServer {
             val message = JSONObject(line)
             when (message.optString("type")) {
                 "esim.request" -> handleRequestMessage(connection, message)
+                "cellular.status_request" -> handleCellularStatusRequest(connection, message)
+                "wifi.set_enabled_request" -> handleWifiSetEnabledRequest(connection, message)
+                "cellular.set_enabled_request" -> handleCellularSetEnabledRequest(connection, message)
                 else -> {
                     connection.send(
                         JSONObject()
@@ -201,6 +205,142 @@ object EsimBridgeServer {
                 .put("request_id", requestId)
                 .put("action", action)
         )
+    }
+
+    private fun handleCellularStatusRequest(connection: ClientConnection, message: JSONObject) {
+        val context = appContext
+        if (context == null) {
+            connection.send(
+                JSONObject()
+                    .put("type", "cellular.status_error")
+                    .put("message", "Server app context unavailable")
+                    .put("request_id", message.optString("request_id").ifEmpty { JSONObject.NULL })
+            )
+            return
+        }
+
+        connection.send(
+            JSONObject()
+                .put("type", "cellular.status_result")
+                .put("request_id", message.optString("request_id").ifEmpty { JSONObject.NULL })
+                .put("payload", CellularStatusProvider.snapshot(context))
+        )
+    }
+
+    private fun handleWifiSetEnabledRequest(connection: ClientConnection, message: JSONObject) {
+        val context = appContext
+        val requestId = message.optString("request_id").ifEmpty { null }
+        if (context == null) {
+            connection.send(
+                JSONObject()
+                    .put("type", "wifi.set_enabled_error")
+                    .put("request_id", requestId ?: JSONObject.NULL)
+                    .put("payload", JSONObject().put("message", "Server app context unavailable"))
+            )
+            return
+        }
+
+        val enabled = message.optJSONObject("payload")?.optBoolean("enabled")
+        if (enabled == null) {
+            connection.send(
+                JSONObject()
+                    .put("type", "wifi.set_enabled_error")
+                    .put("request_id", requestId ?: JSONObject.NULL)
+                    .put("payload", JSONObject().put("message", "enabled is required"))
+            )
+            return
+        }
+
+        try {
+            val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                ?: throw IllegalStateException("WifiManager unavailable")
+            val success = wifiManager.setWifiEnabled(enabled)
+            if (!success) {
+                throw IllegalStateException("WifiManager rejected toggle request")
+            }
+            connection.send(
+                JSONObject()
+                    .put("type", "wifi.set_enabled_result")
+                    .put("request_id", requestId ?: JSONObject.NULL)
+                    .put("payload", JSONObject()
+                        .put("result", "success")
+                        .put("enabled", enabled)
+                    )
+            )
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed to toggle Wi-Fi", t)
+            connection.send(
+                JSONObject()
+                    .put("type", "wifi.set_enabled_error")
+                    .put("request_id", requestId ?: JSONObject.NULL)
+                    .put("payload", JSONObject()
+                        .put("message", t.message ?: "Failed to toggle Wi-Fi")
+                    )
+            )
+        }
+    }
+
+    private fun handleCellularSetEnabledRequest(connection: ClientConnection, message: JSONObject) {
+        val context = appContext
+        val requestId = message.optString("request_id").ifEmpty { null }
+        if (context == null) {
+            connection.send(
+                JSONObject()
+                    .put("type", "cellular.set_enabled_error")
+                    .put("request_id", requestId ?: JSONObject.NULL)
+                    .put("payload", JSONObject().put("message", "Server app context unavailable"))
+            )
+            return
+        }
+
+        val enabled = message.optJSONObject("payload")?.optBoolean("enabled")
+        if (enabled == null) {
+            connection.send(
+                JSONObject()
+                    .put("type", "cellular.set_enabled_error")
+                    .put("request_id", requestId ?: JSONObject.NULL)
+                    .put("payload", JSONObject().put("message", "enabled is required"))
+            )
+            return
+        }
+
+        try {
+            val command = listOf("cmd", "phone", "data", if (enabled) "enable" else "disable")
+            val process = ProcessBuilder(command)
+                .redirectErrorStream(false)
+                .start()
+            val stdout = process.inputStream.bufferedReader().use { it.readText() }.trim()
+            val stderr = process.errorStream.bufferedReader().use { it.readText() }.trim()
+            val exitCode = process.waitFor()
+            if (exitCode != 0) {
+                val suffix = listOf(stdout, stderr)
+                    .filter { it.isNotEmpty() }
+                    .joinToString(" | ")
+                    .takeIf { it.isNotEmpty() }
+                    ?.let { ": $it" }
+                    .orEmpty()
+                throw IllegalStateException("cmd phone data ${if (enabled) "enable" else "disable"} failed (exit $exitCode)$suffix")
+            }
+            connection.send(
+                JSONObject()
+                    .put("type", "cellular.set_enabled_result")
+                    .put("request_id", requestId ?: JSONObject.NULL)
+                    .put("payload", JSONObject()
+                        .put("result", "success")
+                        .put("enabled", enabled)
+                    )
+            )
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed to toggle cellular data", t)
+            connection.send(
+                JSONObject()
+                    .put("type", "cellular.set_enabled_error")
+                    .put("request_id", requestId ?: JSONObject.NULL)
+                    .put("payload", JSONObject()
+                        .put("message", t.message ?: "Failed to toggle cellular data")
+                    )
+            )
+        }
     }
 
     private fun broadcast(event: JSONObject) {

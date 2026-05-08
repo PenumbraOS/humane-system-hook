@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex, RwLock};
@@ -40,6 +41,20 @@ pub enum EsimRequestError {
         request_id: Option<String>,
         message: String,
     },
+}
+
+#[derive(Debug, Clone)]
+pub enum CellularStatusError {
+    BridgeError(Value),
+    Timeout { request_id: String },
+    Internal(String),
+}
+
+#[derive(Debug, Clone)]
+pub enum DeviceToggleError {
+    BridgeError(Value),
+    Timeout { request_id: String },
+    Internal(String),
 }
 
 #[derive(Clone)]
@@ -261,6 +276,114 @@ impl EsimBridge {
         self.state.requests.lock().await.get(request_id).cloned()
     }
 
+    pub async fn get_cellular_status(&self, timeout: std::time::Duration) -> Result<Value, CellularStatusError> {
+        let request_id = format!("cellular_{}", Uuid::new_v4().simple());
+        let body = serde_json::json!({
+            "type": "cellular.status_request",
+            "request_id": request_id,
+        });
+        self.state
+            .command_tx
+            .send(OutboundMessage {
+                body,
+                accepted_tx: None,
+            })
+            .map_err(|_| CellularStatusError::Internal("bridge command queue closed".to_string()))?;
+
+        let mut rx = self.state.events_tx.subscribe();
+        let wait_request_id = request_id.clone();
+        let wait = async move {
+            loop {
+                let event = rx.recv().await.map_err(|error| match error {
+                    RecvError::Lagged(missed) => CellularStatusError::Internal(format!("cellular status stream lagged by {missed}")),
+                    RecvError::Closed => CellularStatusError::Internal("cellular status stream closed".to_string()),
+                })?;
+                let event_request_id = event.get("request_id").and_then(Value::as_str);
+                if event_request_id != Some(wait_request_id.as_str()) {
+                    continue;
+                }
+                match event.get("type").and_then(Value::as_str) {
+                    Some("cellular.status_result") => return Ok(event),
+                    Some("cellular.status_error") => return Err(CellularStatusError::BridgeError(event)),
+                    _ => continue,
+                }
+            }
+        };
+
+        tokio::time::timeout(timeout, wait)
+            .await
+            .map_err(|_| CellularStatusError::Timeout { request_id })?
+    }
+
+    pub async fn set_wifi_enabled(&self, enabled: bool, timeout: std::time::Duration) -> Result<Value, DeviceToggleError> {
+        self.send_simple_request_and_wait(
+            "wifi.set_enabled_request",
+            serde_json::json!({ "enabled": enabled }),
+            "wifi.set_enabled_result",
+            "wifi.set_enabled_error",
+            timeout,
+        ).await
+    }
+
+    pub async fn set_cellular_enabled(&self, enabled: bool, timeout: std::time::Duration) -> Result<Value, DeviceToggleError> {
+        self.send_simple_request_and_wait(
+            "cellular.set_enabled_request",
+            serde_json::json!({ "enabled": enabled }),
+            "cellular.set_enabled_result",
+            "cellular.set_enabled_error",
+            timeout,
+        ).await
+    }
+
+    async fn send_simple_request_and_wait(
+        &self,
+        message_type: &str,
+        payload: Value,
+        success_type: &str,
+        error_type: &str,
+        timeout: std::time::Duration,
+    ) -> Result<Value, DeviceToggleError> {
+        let request_id = format!("toggle_{}", Uuid::new_v4().simple());
+        let body = serde_json::json!({
+            "type": message_type,
+            "request_id": request_id,
+            "payload": payload,
+        });
+        self.state
+            .command_tx
+            .send(OutboundMessage {
+                body,
+                accepted_tx: None,
+            })
+            .map_err(|_| DeviceToggleError::Internal("bridge command queue closed".to_string()))?;
+
+        let mut rx = self.state.events_tx.subscribe();
+        let wait_request_id = request_id.clone();
+        let success_type = success_type.to_string();
+        let error_type = error_type.to_string();
+        let wait = async move {
+            loop {
+                let event = rx.recv().await.map_err(|error| match error {
+                    RecvError::Lagged(missed) => DeviceToggleError::Internal(format!("device toggle stream lagged by {missed}")),
+                    RecvError::Closed => DeviceToggleError::Internal("device toggle stream closed".to_string()),
+                })?;
+                let event_request_id = event.get("request_id").and_then(Value::as_str);
+                if event_request_id != Some(wait_request_id.as_str()) {
+                    continue;
+                }
+                match event.get("type").and_then(Value::as_str) {
+                    Some(value) if value == success_type => return Ok(event),
+                    Some(value) if value == error_type => return Err(DeviceToggleError::BridgeError(event)),
+                    _ => continue,
+                }
+            }
+        };
+
+        tokio::time::timeout(timeout, wait)
+            .await
+            .map_err(|_| DeviceToggleError::Timeout { request_id })?
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<Value> {
         self.state.events_tx.subscribe()
     }
@@ -370,7 +493,7 @@ async fn handle_incoming_message(
                         "esim.profiles_result"
                             | "esim.active_profile_result"
                             | "esim.active_iccid_result"
-                            | "esim.eid_result"
+                            | "esim.device_identifiers_result"
                             | "esim.profile_mutation_result"
                             | "esim.download_result"
                     ) {

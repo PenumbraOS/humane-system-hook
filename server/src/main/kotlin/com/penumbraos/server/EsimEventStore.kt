@@ -30,6 +30,9 @@ object EsimEventStore {
     private var pendingProfileCount: Int? = null
 
     @Volatile
+    private var currentImei: String? = null
+
+    @Volatile
     private var activeDownloadRequestId: String? = null
 
     @Volatile
@@ -72,6 +75,7 @@ object EsimEventStore {
             "humane.connectivity.esimlpa.getActiveprofileICCID",
             "humane.connectivity.esimlpa.getEID" -> {
                 lastIntentResult = null
+                currentImei = null
             }
             "humane.connectivity.esimlpa.downloadVerifyAndEnableProfile",
             "humane.connectivity.esimlpa.downloadAndEnableProfile" -> {
@@ -101,11 +105,11 @@ object EsimEventStore {
                 maybeSynthesizeProfilesResult()
                 maybeSynthesizeActiveProfileResult(payload)
                 maybeSynthesizeActiveIccidResult(payload)
-                maybeSynthesizeEidResult(payload)
+                maybeSynthesizeDeviceIdentifiersResult(payload)
             }
             key == "humane.esim.ActiveProfile" -> maybeSynthesizeActiveProfileResult(payload)
             key == "humane.esim.ICCID" -> maybeSynthesizeActiveIccidResult(payload)
-            key == "humane.esim.EID" -> maybeSynthesizeEidResult(payload)
+            key == "humane.esim.EID" || key == "humane.esim.IMEI" -> maybeSynthesizeDeviceIdentifiersResult(payload)
         }
     }
 
@@ -263,24 +267,29 @@ object EsimEventStore {
         }
     }
 
-    private fun maybeSynthesizeEidResult(payload: JSONObject) {
+    private fun maybeSynthesizeDeviceIdentifiersResult(payload: JSONObject) {
         if (currentAction != "humane.connectivity.esimlpa.getEID") return
+
+        when (payload.optString("key")) {
+            "humane.esim.IMEI" -> currentImei = payload.optString("value").takeIf { it.isNotEmpty() }
+        }
 
         val eid = payload.takeIf {
             it.optString("key") == "humane.esim.EID"
         }?.optString("value")
 
         if (!eid.isNullOrEmpty() && lastIntentResult == "Get EID success") {
-            val event = baseEvent("esim.eid_result")
+            val event = baseEvent("esim.device_identifiers_result")
                 .put(
                     "payload",
                     JSONObject()
                         .put("result", "success")
                         .put("eid", eid)
+                        .put("imei", currentImei?.let { it } ?: JSONObject.NULL)
                         .put("raw_lastintent_result", lastIntentResult)
                 )
             appendRecent(event)
-            Log.w(TAG, "Synthesized eid_result payload=${event.optJSONObject("payload")}")
+            Log.w(TAG, "Synthesized device_identifiers_result payload=${event.optJSONObject("payload")}")
             notifyTypedEvent(event)
         }
     }

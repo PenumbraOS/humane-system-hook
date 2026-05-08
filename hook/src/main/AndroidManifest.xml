@@ -4,6 +4,8 @@
     android:sharedUserId="android.uid.system"
     tools:ignore="Deprecated">
 
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+
     <application
         android:allowBackup="false"
         android:label="PenumbraHook">
