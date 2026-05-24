@@ -86,9 +86,13 @@ pub struct ServerConfig {
     #[serde(default = "default_public_addr")]
     pub public_addr: String,
 
-    /// System prompt sent to the LLM.
+    /// System prompt template sent to the LLM.
     #[serde(default = "default_system_prompt")]
     pub system_prompt: String,
+
+    /// Request status prompt template sent to the LLM after app-provided history.
+    #[serde(default = "default_status_prompt")]
+    pub status_prompt: String,
 
     /// Display name shown during onboarding welcome screen.
     pub display_name: Option<String>,
@@ -181,6 +185,17 @@ fn default_system_prompt() -> String {
     "You are a helpful assistant running on a Humane AI Pin. Keep responses concise - they will be displayed on a laser projector and spoken aloud.".into()
 }
 
+fn default_status_prompt() -> String {
+    r#"Current request status:
+- Current timestamp: {{current_timestamp}}
+- Current date: {{current_date}}
+- Current time: {{current_time}}
+{{#if location_name}}- User location: {{location_name}}{{else}}- User location: unknown
+{{/if}}{{#if coordinates}}- User coordinates: {{coordinates}}
+{{/if}}
+This status applies to the current user request only. If it conflicts with earlier conversation history, prefer this current status."#.into()
+}
+
 fn default_media_dir() -> String {
     "./media".into()
 }
@@ -208,6 +223,7 @@ impl Default for ServerConfig {
             grpc_bind_addr: default_grpc_bind_addr(),
             public_addr: default_public_addr(),
             system_prompt: default_system_prompt(),
+            status_prompt: default_status_prompt(),
             display_name: None,
         }
     }

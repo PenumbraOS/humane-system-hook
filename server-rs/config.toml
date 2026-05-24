@@ -9,6 +9,16 @@ model = "gemini-2.5-flash"   # model ID for the provider
 port = 9090
 public_addr = "192.168.1.125:9090"
 system_prompt = "You are a helpful assistant running on a Humane AI Pin. Keep responses concise - they will be displayed on a laser projector and spoken aloud."
+status_prompt = """
+Current request status:
+- Current timestamp: {{current_timestamp}}
+- Current date: {{current_date}}
+- Current time: {{current_time}}
+{{#if location_name}}- User location: {{location_name}}{{else}}- User location: unknown
+{{/if}}{{#if coordinates}}- User coordinates: {{coordinates}}
+{{/if}}
+This status applies to the current user request only. If it conflicts with earlier conversation history, prefer this current status.
+"""
 
 [storage]
 media_dir = "./media"       # directory for captured photos, videos, and notes

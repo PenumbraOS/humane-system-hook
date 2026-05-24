@@ -7,4 +7,5 @@ mod request;
 mod rig_backend;
 
 pub use agent::LlmAgent;
-pub use request::LlmChatRequest;
+pub use prompt::validate_prompt_template;
+pub use request::{LlmChatRequest, PromptTemplateContext, PromptTemplates};

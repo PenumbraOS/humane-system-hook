@@ -27,7 +27,7 @@ use crate::esim::{
     CellularStatusError, DeviceToggleError, EsimBridge, EsimRequestError, EsimRequestRecord,
     EsimSnapshot,
 };
-use crate::llm::LlmAgent;
+use crate::llm::{validate_prompt_template, LlmAgent};
 use crate::storage::{MediaStore, MemoryRecord};
 
 const ESIM_GETTER_TIMEOUT: Duration = Duration::from_secs(20);
@@ -266,6 +266,7 @@ struct ServerSettingsResponse {
     grpc_bind_addr: String,
     public_addr: String,
     system_prompt: String,
+    status_prompt: String,
     display_name: Option<String>,
 }
 
@@ -301,6 +302,7 @@ async fn get_settings(State(state): State<ApiState>) -> Json<SettingsResponse> {
             grpc_bind_addr: config.server.grpc_bind_addr.clone(),
             public_addr: config.server.public_addr.clone(),
             system_prompt: config.server.system_prompt.clone(),
+            status_prompt: config.server.status_prompt.clone(),
             display_name: config.server.display_name.clone(),
         },
         storage: StorageSettingsResponse {
@@ -668,6 +670,7 @@ struct UpdateServerSettings {
     /// Read-only — rejected if present.
     public_addr: Option<serde_json::Value>,
     system_prompt: Option<String>,
+    status_prompt: Option<String>,
     display_name: Option<String>,
 }
 
@@ -716,6 +719,27 @@ async fn update_settings(
             "storage paths cannot be changed at runtime (requires server restart)",
         )
             .into_response();
+    }
+
+    if let Some(ref server) = body.server {
+        if let Some(ref system_prompt) = server.system_prompt {
+            if let Err(error) = validate_prompt_template("server.system_prompt", system_prompt) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    format!("invalid server.system_prompt template: {error}"),
+                )
+                    .into_response();
+            }
+        }
+        if let Some(ref status_prompt) = server.status_prompt {
+            if let Err(error) = validate_prompt_template("server.status_prompt", status_prompt) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    format!("invalid server.status_prompt template: {error}"),
+                )
+                    .into_response();
+            }
+        }
     }
 
     // Take a write lock on the shared config and apply changes.
@@ -769,6 +793,11 @@ async fn update_settings(
         if let Some(ref system_prompt) = server.system_prompt {
             if *system_prompt != config.server.system_prompt {
                 config.server.system_prompt = system_prompt.clone();
+            }
+        }
+        if let Some(ref status_prompt) = server.status_prompt {
+            if *status_prompt != config.server.status_prompt {
+                config.server.status_prompt = status_prompt.clone();
             }
         }
         if let Some(ref display_name) = server.display_name {
@@ -870,6 +899,7 @@ async fn update_settings(
             grpc_bind_addr: config.server.grpc_bind_addr.clone(),
             public_addr: config.server.public_addr.clone(),
             system_prompt: config.server.system_prompt.clone(),
+            status_prompt: config.server.status_prompt.clone(),
             display_name: config.server.display_name.clone(),
         },
         storage: StorageSettingsResponse {
@@ -952,6 +982,7 @@ fn persist_config_inner(
         table["grpc_bind_addr"] = toml_edit::value(&config.server.grpc_bind_addr);
         table["public_addr"] = toml_edit::value(&config.server.public_addr);
         table["system_prompt"] = toml_edit::value(&config.server.system_prompt);
+        table["status_prompt"] = toml_edit::value(&config.server.status_prompt);
         match &config.server.display_name {
             Some(name) => table["display_name"] = toml_edit::value(name),
             None => {

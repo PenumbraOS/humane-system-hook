@@ -21,6 +21,8 @@ tracing-appender = "0.2"
 uuid = { version = "1", features = ["v4"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+handlebars = "6"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 async-stream = "0.3"
 rig-core = { version = "0.34", default-features = false, features = ["reqwest", "native-tls"] }
 toml = "0.8"

@@ -11,7 +11,7 @@ use tracing::{debug, info, warn};
 
 use crate::config::Config;
 use crate::db::Database;
-use crate::llm::{LlmAgent, LlmChatRequest};
+use crate::llm::{LlmAgent, LlmChatRequest, PromptTemplateContext, PromptTemplates};
 use crate::nearby::NearbyClient;
 use crate::proto::aibus::ai_bus_service_server::AiBusService;
 use crate::proto::aibus::*;
@@ -29,6 +29,31 @@ pub struct AiBusServiceImpl {
 }
 
 impl AiBusServiceImpl {
+    fn build_prompt_template_context(
+        &self,
+        req: &SynapseUnderstandingRequest,
+        run_id: &str,
+        config: &Config,
+    ) -> PromptTemplateContext {
+        // TODO: Expose specific device fields, like battery level, wifi/cellular status, etc.
+        let mut context = PromptTemplateContext::new(run_id, config, chrono::Local::now());
+
+        if let Some(ctx) = req.device_context.as_ref() {
+            context.location_name = non_empty_string(&ctx.reverse_geocoded_location);
+        }
+
+        if let Some(loc) = req.location.as_ref() {
+            let latitude = format_coordinate(loc.latitude);
+            let longitude = format_coordinate(loc.longitude);
+
+            context.latitude = Some(latitude.clone());
+            context.longitude = Some(longitude.clone());
+            context.coordinates = Some(format!("{latitude}, {longitude}"));
+        }
+
+        context
+    }
+
     /// Persist a conversation to SQLite in a background task.
     fn spawn_save_conversation(
         &self,
@@ -86,6 +111,20 @@ fn wrap_plaintext_envelope(kid: &str, data: Vec<u8>) -> encryption::EncryptedDat
         encryption_information: Some(encryption::EncryptionInformation { kid: kid.into() }),
         data,
     }
+}
+
+fn non_empty_string(value: &str) -> Option<String> {
+    let value = value.trim();
+
+    if !value.is_empty() {
+        Some(value.to_string())
+    } else {
+        None
+    }
+}
+
+fn format_coordinate(value: f64) -> String {
+    format!("{value:.3}")
 }
 
 /// Decode the plaintext proto bytes from an EncryptedData envelope.
@@ -206,8 +245,18 @@ impl AiBusService for AiBusServiceImpl {
         // --- Normal (non-vision) handling ---
 
         // Call LLM agent with conversation history
-        let system_prompt = self.config.read().await.server.system_prompt.clone();
-        let chat_request = LlmChatRequest::new(utterance.clone(), history.clone(), system_prompt);
+        let config = self.config.read().await.clone();
+        let templates = PromptTemplates {
+            system_prompt: config.server.system_prompt.clone(),
+            status_prompt: config.server.status_prompt.clone(),
+        };
+        let template_context = self.build_prompt_template_context(&req, &run_id, &config);
+        let chat_request = LlmChatRequest::new(
+            utterance.clone(),
+            history.clone(),
+            templates,
+            template_context,
+        );
         let agent = self.agent.read().await.clone();
         let response_text = match agent.chat(chat_request).await {
             Ok(text) => text,
