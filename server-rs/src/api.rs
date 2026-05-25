@@ -5,6 +5,7 @@
 //! public HTTPS portal can reach this HTTP server on the LAN.
 
 mod contacts;
+pub mod device;
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -29,6 +30,7 @@ use crate::esim::{
 };
 use crate::llm::{validate_prompt_template, LlmAgent};
 use crate::storage::{MediaStore, MemoryRecord};
+use device::{DeviceApi, DeviceVersionSnapshot};
 
 const ESIM_GETTER_TIMEOUT: Duration = Duration::from_secs(20);
 const CELLULAR_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
@@ -61,6 +63,8 @@ pub struct ApiState {
     pub esim_bridge: EsimBridge,
     /// One-shot flag consumed by the device contacts sync hook.
     pub contact_client_reset_pending: Arc<AtomicBool>,
+    /// Current device software and OS versions.
+    pub device_versions: DeviceVersionSnapshot,
 }
 
 // ─── Event types for the streaming endpoint ─────────────────────────
@@ -86,7 +90,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/memories/{uuid}/thumbnail/{index}", get(get_thumbnail))
         .route("/api/memories/{uuid}/files/{filename}", get(get_file))
         .nest("/api", contacts::router())
-        .route("/api/device", get(get_device))
+        .route("/api/device", get(DeviceApi::get_device))
         .route("/api/settings", get(get_settings))
         .route("/api/settings", put(update_settings))
         .route("/api/events", get(event_stream))
@@ -212,32 +216,6 @@ async fn serve_file(path: &std::path::Path, content_type: &str) -> Result<Respon
     })?;
 
     Ok(([(header::CONTENT_TYPE, content_type.to_string())], data).into_response())
-}
-
-// ─── Device info ────────────────────────────────────────────────────
-
-#[derive(Serialize)]
-struct DeviceInfo {
-    display_name: String,
-    http_bind_addr: String,
-    grpc_bind_addr: String,
-    llm_provider: LlmProvider,
-    llm_model: String,
-}
-
-async fn get_device(State(state): State<ApiState>) -> Json<DeviceInfo> {
-    let config = state.shared_config.read().await;
-    Json(DeviceInfo {
-        display_name: config
-            .server
-            .display_name
-            .clone()
-            .unwrap_or_else(|| "Penumbra".into()),
-        http_bind_addr: config.server.http_bind_addr.clone(),
-        grpc_bind_addr: config.server.grpc_bind_addr.clone(),
-        llm_provider: config.llm.provider,
-        llm_model: config.llm.model.clone(),
-    })
 }
 
 // ─── Settings ───────────────────────────────────────────────────────

@@ -105,6 +105,8 @@ use tracing::{info, warn};
 
 use std::time::Duration;
 
+use crate::api::device::DeviceVersionCollector;
+
 #[cfg(not(target_os = "android"))]
 fn load_dotenv(config_path: &FsPath) {
     let Some(config_dir) = config_path.parent() else {
@@ -427,6 +429,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let esim_bridge = esim::EsimBridge::start();
+    let device_versions = DeviceVersionCollector::collect().await;
 
     // Build the REST API router for the web portal
     let api_state = api::ApiState {
@@ -443,6 +446,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         log_file_prefix: log_file_prefix_for_api,
         esim_bridge,
         contact_client_reset_pending: Arc::new(AtomicBool::new(false)),
+        device_versions,
     };
 
     // CORS layer for the web portal (public HTTPS → local HTTP via LNA).

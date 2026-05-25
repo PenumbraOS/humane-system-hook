@@ -19,6 +19,7 @@ import java.security.cert.X509Certificate
 object IronmanHooks {
 
     private const val TAG = "PenumbraHook"
+    private const val HUMANE_DISPLAY_VERSION_KEY = "penumbra.humane_display_version"
 
     fun install(cl: ClassLoader) {
         Log.w(TAG, "Installing ironman hooks...")
@@ -163,9 +164,15 @@ object IronmanHooks {
                     }
 
                     try {
+                        cacheHumaneDisplayVersion(app, cl)
+                    } catch (t: Throwable) {
+                        Log.e(TAG, "Humane display version cache failed", t)
+                    }
+
+                    try {
                         fixProvisioningState(app, cl)
                     } catch (t: Throwable) {
-                        Log.e(TAG, "Provisioning fix failed (non-fatal)", t)
+                        Log.e(TAG, "Provisioning fix failed", t)
                     }
                 }
             })
@@ -183,9 +190,15 @@ object IronmanHooks {
                         if (myProcess.contains(":")) return
 
                         try {
+                            cacheHumaneDisplayVersion(app, cl)
+                        } catch (t: Throwable) {
+                            Log.e(TAG, "Humane display version cache failed", t)
+                        }
+
+                        try {
                             fixProvisioningState(app, cl)
                         } catch (t: Throwable) {
-                            Log.e(TAG, "Provisioning fix failed (non-fatal)", t)
+                            Log.e(TAG, "Provisioning fix failed", t)
                         }
                     }
                 })
@@ -193,6 +206,38 @@ object IronmanHooks {
             } catch (t2: Throwable) {
                 Log.e(TAG, "  Failed to hook Application.onCreate() fallback: ${t2.message}")
             }
+        }
+    }
+
+    /**
+     * Cache Humane's display software version in Settings.Global so the Penumbra
+     * server can expose it without directly reading SELinux-restricted
+     * ro.humane.* properties.
+     */
+    private fun cacheHumaneDisplayVersion(app: Application, cl: ClassLoader) {
+        val displayVersion = try {
+            val deviceAgentClass = cl.loadClass("humaneinternal.system.utils.DeviceAgent")
+            val method = deviceAgentClass.getMethod("getDisplayVersion")
+            method.invoke(null) as? String
+        } catch (t: Throwable) {
+            Log.w(TAG, "  Failed to read DeviceAgent.getDisplayVersion(): ${t.javaClass.simpleName}: ${t.message}")
+            null
+        }?.trim().orEmpty()
+
+        if (displayVersion.isEmpty()) {
+            Log.w(TAG, "  Humane display version is empty; not caching")
+            return
+        }
+
+        val success = Settings.Global.putString(
+            app.contentResolver,
+            HUMANE_DISPLAY_VERSION_KEY,
+            displayVersion,
+        )
+        if (success) {
+            Log.w(TAG, "  Cached Humane display version in Settings.Global: $displayVersion")
+        } else {
+            Log.w(TAG, "  Settings.Global.putString($HUMANE_DISPLAY_VERSION_KEY) returned false")
         }
     }
 
