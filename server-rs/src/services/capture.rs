@@ -72,6 +72,7 @@ fn chrono_now() -> String {
 }
 
 /// Generate filenames for a capture burst based on memory type and counts.
+#[allow(deprecated)]
 fn generate_burst_files(
     memory_uuid: &str,
     burst_index: usize,
@@ -160,6 +161,7 @@ impl CaptureService for CaptureServiceImpl {
         Ok(Response::new(MemoryCreateIntentResponse {}))
     }
 
+    #[allow(deprecated)]
     async fn create_memory(
         &self,
         request: Request<CreateMemoryRequest>,

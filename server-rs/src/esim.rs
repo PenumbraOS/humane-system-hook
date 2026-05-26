@@ -36,7 +36,6 @@ pub struct EsimSnapshot {
 #[derive(Debug, Clone)]
 pub enum EsimRequestError {
     BridgeError {
-        request_id: String,
         event: Value,
     },
     Timeout {
@@ -86,8 +85,6 @@ struct BridgeEnvelope {
     message_type: String,
     #[serde(default)]
     request_id: Option<String>,
-    #[serde(default)]
-    action: Option<String>,
     #[serde(default)]
     payload: Option<Value>,
 }
@@ -224,10 +221,7 @@ impl EsimBridge {
             if bridge_error_for_request(&existing, request_id)
                 || explicit_error_event_for_request(&existing, request_id)
             {
-                return Err(EsimRequestError::BridgeError {
-                    request_id: request_id.to_string(),
-                    event: existing,
-                });
+                return Err(EsimRequestError::BridgeError { event: existing });
             }
             if matches_terminal_type(&existing, terminal_types) {
                 return Ok(existing);
@@ -255,10 +249,7 @@ impl EsimBridge {
                 if bridge_error_for_request(&event, &request_id)
                     || explicit_error_event_for_request(&event, &request_id)
                 {
-                    return Err(EsimRequestError::BridgeError {
-                        request_id: request_id.clone(),
-                        event,
-                    });
+                    return Err(EsimRequestError::BridgeError { event });
                 }
 
                 let event_type = event.get("type").and_then(Value::as_str);

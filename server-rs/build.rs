@@ -4,6 +4,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let version =
         std::env::var("PENUMBRA_VERSION").unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string());
     println!("cargo:rustc-env=PENUMBRA_VERSION={version}");
+    println!("cargo:rerun-if-changed=proto/humane/aibus/aibus.proto");
+    println!("cargo:rerun-if-changed=proto/humane/common/encryption.proto");
 
     tonic_prost_build::configure()
         .build_server(true)

@@ -15,6 +15,7 @@ pub struct ContactsRpcServiceImpl {
 
 #[tonic::async_trait]
 impl ContactsRpcService for ContactsRpcServiceImpl {
+    #[allow(deprecated)]
     async fn get_contacts(
         &self,
         request: Request<GetContactsRequest>,
@@ -135,6 +136,7 @@ impl ContactsRpcService for ContactsRpcServiceImpl {
     }
 }
 
+#[allow(deprecated)]
 fn contact_to_proto(contact: ContactRecord) -> Contact {
     Contact {
         id: contact.id,

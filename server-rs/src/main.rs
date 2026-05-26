@@ -16,6 +16,7 @@ mod storage;
 mod synapse;
 
 /// Generated protobuf/gRPC modules.
+#[allow(unused)]
 mod proto {
     pub mod aibus {
         tonic::include_proto!("humane.aibus");
@@ -363,7 +364,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("  - humane.events.EventsIngestService/IngestBatch (discard)");
     info!("  - humane.provisioning.DeviceOnboardingDACService/* (onboarding)");
     info!("  - humane.capture.CaptureService/* (photo/video/note storage)");
+    info!("  - humane.aibus.AIBusService/EncryptedUnderstand (LLM)");
+    info!("  - humane.aibus.AIBusService/EncryptedAnalyzeImage (vision)");
+    info!("  - humane.aibus.AIBusService/EncryptedCompletion (LLM)");
+    info!("  - humane.aibus.AIBusService/EncryptedChatCompletion (LLM)");
     info!("  - humane.aibus.AIBusService/EncryptedNearbySearch (Overpass/OSM)");
+    info!("  - humane.aibus.AIBusService/EncryptedReverseGeocode (Nominatim/OSM)");
+    info!("  - humane.aibus.AIBusService/EncryptedGeoLocate (stub: device GPS preferred)");
     info!("  - humane.privacy.grpc.pub.PublicPrivacyService/* (stub — empty responses)");
     info!("  - PUT /upload/:uuid/:filename (HTTP media upload)");
     info!("  - GET /api/* (REST API for web portal)");
@@ -383,16 +390,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let log_file_prefix_for_api: String = config.logging.file_prefix.clone();
 
     // Build the gRPC service stack as a native axum::Router.
-    let grpc_router = DedupRouter::new(AiBusServiceServer::new(AiBusServiceImpl {
-        agent: shared_agent.clone(),
-        config: shared_config.clone(),
-        pirate_weather_api_key: shared_weather_key.clone(),
-        nearby_client: nearby::NearbyClient::new(http_client.clone()),
-        http_client: http_client.clone(),
-        db: database.clone(),
-    }))
+    let grpc_router = DedupRouter::new(AiBusServiceServer::new(AiBusServiceImpl::new(
+        shared_agent.clone(),
+        shared_config.clone(),
+        shared_weather_key.clone(),
+        nearby::NearbyClient::new(http_client.clone()),
+        http_client.clone(),
+        database.clone(),
+    )))
     .dedup::<AiBus>("EncryptedWeather", Duration::from_secs(300))
     .dedup::<AiBus>("EncryptedNearbySearch", Duration::from_secs(30))
+    .dedup::<AiBus>("EncryptedReverseGeocode", Duration::from_secs(30))
+    .dedup::<AiBus>("EncryptedUnderstand", Duration::from_millis(200))
+    .dedup::<AiBus>("EncryptedAnalyzeImage", Duration::from_millis(200))
+    .dedup::<AiBus>("EncryptedCompletion", Duration::from_millis(200))
+    .dedup::<AiBus>("EncryptedChatCompletion", Duration::from_millis(200))
     .dedup::<AiBus>("Understand", Duration::from_millis(200))
     .dedup::<AiBus>("AnalyzeImage", Duration::from_millis(200))
     .add_service(PushRelayServiceServer::new(PushRelayServiceImpl))
@@ -435,7 +447,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_state = api::ApiState {
         store: media_store,
         db: database,
-        config: Arc::new(config),
         events_tx,
         config_path,
         shared_config,

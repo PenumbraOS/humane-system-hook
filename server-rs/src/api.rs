@@ -43,7 +43,6 @@ const NETWORK_TOGGLE_TIMEOUT: Duration = Duration::from_secs(10);
 pub struct ApiState {
     pub store: Arc<Mutex<MediaStore>>,
     pub db: Database,
-    pub config: Arc<Config>,
     pub events_tx: tokio::sync::broadcast::Sender<Event>,
     /// Path to config.toml on disk — needed for writing settings back.
     pub config_path: PathBuf,

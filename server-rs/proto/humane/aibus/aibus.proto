@@ -319,26 +319,361 @@ message EncryptedGeoLocateResponse {
   humane.common.encryption.EncryptedData response = 1;
 }
 
+// ---- Encrypted wrappers ----
+
+message EncryptedSynapseUnderstandingRequest {
+  humane.common.encryption.EncryptedData request = 1;
+  humane.common.encryption.EncryptedData location = 2;
+}
+
+message EncryptedSynapseUnderstandingResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedAnalyzeImageRequest {
+  humane.common.encryption.EncryptedData request = 1;
+  humane.common.encryption.EncryptedData location = 2;
+}
+
+message EncryptedAnalyzeImageResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedReverseGeocodeRequest {
+  humane.common.encryption.EncryptedData location = 1;
+}
+
+message EncryptedReverseGeocodeResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedNavigationDirectionsRequest {
+  humane.common.encryption.EncryptedData location = 1;
+  humane.common.encryption.EncryptedData request = 2;
+}
+
+message EncryptedNavigationDirectionsResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedCompletionRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedCompletionResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedChatCompletionRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedChatCompletionResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedAiRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedAiResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedLoadingMessageRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedLoadingMessageResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedSmartPlaylistRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedSmartPlaylistResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedFunctionCall {
+  humane.common.encryption.EncryptedData function_call = 1;
+  humane.common.encryption.EncryptedData location = 2;
+}
+
+message EncryptedFunctionResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedAnalyzeFoodImageRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedAnalyzeFoodImageResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedGetFoodItemRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedGetFoodItemResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedActionBasedInterstitialRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedActionBasedInterstitialResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedTranslateRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedTranslateResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message UploadFileRequest {}
+message UploadFileResponse {}
+message FunctionResponse {}
+message ServerStatefulUnderstandRequest {}
+message ServerStatefulUnderstandResponse {}
+message StreamingUnderstandRequest {}
+message StreamingUnderstandResponse {}
+message ActionExecutionTestRequest {}
+message ActionExecutionTestResponse {}
+message TranscriptionRepairTestRequest {}
+message TranscriptionRepairTestResponse {}
+
+// ---- Completion messages ----
+
+message CompletionRequest {
+  string model = 1;
+  string prompt = 2;
+  int32 max_tokens = 3;
+  repeated string stop = 4;
+  string tag = 5;
+}
+
+message CompletionResponse {
+  repeated CompletionChoice choices = 1;
+  CompletionUsage usage = 2;
+  CompletionError error = 3;
+}
+
+message CompletionChoice {
+  string text = 1;
+  int32 index = 2;
+  string finish_reason = 3;
+}
+
+message CompletionUsage {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int32 total_tokens = 3;
+}
+
+message CompletionError {
+  string message = 1;
+  string code = 2;
+  int32 status = 3;
+}
+
+message ChatCompletionRequest {
+  repeated ChatCompletionMessage messages = 1;
+  int32 max_tokens = 2;
+  string stop = 3;
+  string tag = 4;
+  repeated Tool tools = 5;
+  string tool_choice = 6;
+  bool stream = 7;
+  ToolSetVersion tool_set_version = 8;
+  Audio audio_bytes = 9;
+}
+
+message ChatCompletionResponse {
+  repeated Choice choices = 1;
+  ChatCompletionUsage usage = 2;
+  ChatCompletionError error = 3;
+}
+
+message ChatCompletionMessage {
+  string role = 1;
+  string content = 2;
+  repeated ToolCall tool_calls = 3;
+  string name = 4;
+  string tool_call_id = 5;
+}
+
+message Choice {
+  ChatCompletionMessage message = 1;
+  string stop_reason = 2;
+}
+
+message ChatCompletionUsage {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int32 total_tokens = 3;
+}
+
+message ChatCompletionError {
+  string message = 1;
+  string code = 2;
+  int32 status = 3;
+}
+
+message Tool {
+  oneof content {
+    Function function = 1;
+    ServerFunction server_function = 2;
+  }
+}
+
+message Audio {
+  bytes audio = 1;
+  AudioFormat format = 2;
+}
+
+enum AudioFormat {
+  RIFF_16KHZ_16BIT_MONO_PCM = 0;
+  RAW_16KHZ_16BIT_MONO_PCM = 1;
+  RAW_24KHZ_16BIT_MONO_PCM = 2;
+  AUDIO_24KHZ_160KBITRATE_MONO_MP3 = 3;
+}
+
+message Function {
+  string name = 1;
+  string description = 2;
+  repeated FunctionParameter parameters = 3;
+  repeated string is_required = 4;
+}
+
+message FunctionParameter {
+  string name = 1;
+  string type = 2;
+  string description = 3;
+  repeated string enums = 4;
+}
+
+message ServerFunction {
+  string name = 1;
+  string version = 2;
+}
+
+message ToolCall {
+  string id = 1;
+  string type = 2;
+  FunctionCall function = 3;
+}
+
+message FunctionCall {
+  string name = 1;
+  string arguments = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  string reverse_geocoded_location = 4;
+  string time_zone = 5;
+  string utterance = 6;
+  humane.common.encryption.LocationEnvelope location = 7;
+  bool is_locked = 8;
+}
+
+// ---- Reverse geocode messages ----
+
+message ReverseGeocodeResponse {
+  string street_number = 1;
+  string street_name = 2;
+  string municipality = 3;
+  string country_subdivision = 4;
+  string country = 5;
+  string postal_code = 6;
+}
+
+// ---- Navigation messages ----
+
+message NavigationDirectionsRequest {
+  string destination = 1;
+}
+
+message NavigationDirectionsResponse {
+  string summary = 1;
+  repeated NavigationStep steps = 2;
+  NavigationDistance total_distance = 3;
+  NavigationDuration total_duration = 4;
+}
+
+message NavigationStep {
+  string instruction = 1;
+  NavigationDistance distance = 2;
+  NavigationDuration duration = 3;
+  Location start_location = 4;
+  Location end_location = 5;
+  NavigationManeuver maneuver = 6;
+}
+
+message NavigationDistance {
+  string text = 1;
+  int32 value = 2;
+}
+
+message NavigationDuration {
+  string text = 1;
+  int32 value = 2;
+}
+
+enum NavigationManeuver {
+  NAVIGATION_ACTION_UNSPECIFIED = 0;
+  NAVIGATION_ACTION_TURN_SLIGHT_LEFT = 1;
+  NAVIGATION_ACTION_TURN_SHARP_LEFT = 2;
+  NAVIGATION_ACTION_TURN_LEFT = 3;
+  NAVIGATION_ACTION_TURN_SLIGHT_RIGHT = 4;
+  NAVIGATION_ACTION_TURN_SHARP_RIGHT = 5;
+  NAVIGATION_ACTION_KEEP_RIGHT = 6;
+  NAVIGATION_ACTION_KEEP_LEFT = 7;
+  NAVIGATION_ACTION_UTURN_LEFT = 8;
+  NAVIGATION_ACTION_UTURN_RIGHT = 9;
+  NAVIGATION_ACTION_TURN_RIGHT = 10;
+  NAVIGATION_ACTION_GO_STRAIGHT = 11;
+  NAVIGATION_ACTION_RAMP_LEFT = 12;
+  NAVIGATION_ACTION_RAMP_RIGHT = 13;
+  NAVIGATION_ACTION_MERGE = 14;
+  NAVIGATION_ACTION_FORK_LEFT = 15;
+  NAVIGATION_ACTION_FORK_RIGHT = 16;
+  NAVIGATION_ACTION_FERRY = 17;
+  NAVIGATION_ACTION_FERRY_TRAIN = 18;
+  NAVIGATION_ACTION_ROUNDABOUT_LEFT = 19;
+  NAVIGATION_ACTION_ROUNDABOUT_RIGHT = 20;
+}
+
 // ---- Service ----
 
 service AIBusService {
-  // Server-streaming: client sends one request, server streams responses.
-  rpc Understand (SynapseUnderstandingRequest)
-      returns (stream SynapseUnderstandingResponse);
-
-  // Unary: device sends captured image + question, server returns observation.
-  rpc AnalyzeImage (AnalyzeImageRequest)
-      returns (AnalyzeImageResponse);
-
-  // Unary: device sends encrypted location, server returns encrypted weather.
-  rpc EncryptedWeather (EncryptedWeatherRequest)
-      returns (EncryptedWeatherResponse);
-
-  // Unary: device sends cell/wifi data, server returns geolocation.
-  rpc EncryptedGeoLocate (EncryptedGeoLocateRequest)
-      returns (EncryptedGeoLocateResponse);
-
-  // Unary: device sends encrypted location + query, server returns nearby places.
-  rpc EncryptedNearbySearch (EncryptedNearbySearchRequest)
-      returns (EncryptedNearbySearchResponse);
+  rpc UploadFile (UploadFileRequest) returns (UploadFileResponse);
+  rpc Understand (SynapseUnderstandingRequest) returns (stream SynapseUnderstandingResponse);
+  rpc AnalyzeImage (AnalyzeImageRequest) returns (AnalyzeImageResponse);
+  rpc FunctionExecution (FunctionCall) returns (FunctionResponse);
+  rpc ServerStatefulUnderstand (ServerStatefulUnderstandRequest) returns (ServerStatefulUnderstandResponse);
+  rpc BidirectionalStreamingUnderstand (stream StreamingUnderstandRequest) returns (stream StreamingUnderstandResponse);
+  rpc EncryptedStreamAIBus (stream EncryptedAiRequest) returns (stream EncryptedAiResponse);
+  rpc EncryptedUnderstand (EncryptedSynapseUnderstandingRequest) returns (stream EncryptedSynapseUnderstandingResponse);
+  rpc EncryptedLoadingMessage (EncryptedLoadingMessageRequest) returns (EncryptedLoadingMessageResponse);
+  rpc EncryptedNearbySearch (EncryptedNearbySearchRequest) returns (EncryptedNearbySearchResponse);
+  rpc EncryptedNavigationDirections (EncryptedNavigationDirectionsRequest) returns (EncryptedNavigationDirectionsResponse);
+  rpc EncryptedChatCompletion (EncryptedChatCompletionRequest) returns (EncryptedChatCompletionResponse);
+  rpc EncryptedCompletion (EncryptedCompletionRequest) returns (EncryptedCompletionResponse);
+  rpc EncryptedGeoLocate (EncryptedGeoLocateRequest) returns (EncryptedGeoLocateResponse);
+  rpc EncryptedSmartPlaylist (EncryptedSmartPlaylistRequest) returns (EncryptedSmartPlaylistResponse);
+  rpc EncryptedWeather (EncryptedWeatherRequest) returns (EncryptedWeatherResponse);
+  rpc EncryptedReverseGeocode (EncryptedReverseGeocodeRequest) returns (EncryptedReverseGeocodeResponse);
+  rpc EncryptedFunctionExecution (EncryptedFunctionCall) returns (EncryptedFunctionResponse);
+  rpc EncryptedAnalyzeImage (EncryptedAnalyzeImageRequest) returns (EncryptedAnalyzeImageResponse);
+  rpc EncryptedAnalyzeFoodImage (EncryptedAnalyzeFoodImageRequest) returns (EncryptedAnalyzeFoodImageResponse);
+  rpc EncryptedGetFoodItem (EncryptedGetFoodItemRequest) returns (EncryptedGetFoodItemResponse);
+  rpc EncryptedActionBasedInterstitial (EncryptedActionBasedInterstitialRequest) returns (EncryptedActionBasedInterstitialResponse);
+  rpc ActionExecutionTest (ActionExecutionTestRequest) returns (ActionExecutionTestResponse);
+  rpc TranscriptionRepairTest (TranscriptionRepairTestRequest) returns (TranscriptionRepairTestResponse);
+  rpc Translate (EncryptedTranslateRequest) returns (EncryptedTranslateResponse);
 }
