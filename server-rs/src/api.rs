@@ -29,7 +29,7 @@ use crate::esim::{
     CellularStatusError, DeviceToggleError, EsimBridge, EsimRequestError, EsimRequestRecord,
     EsimSnapshot,
 };
-use crate::llm::{validate_prompt_template, LlmAgent};
+use crate::llm::{validate_prompt_template, LlmAgent, LlmRequestLogger};
 use crate::storage::{MediaStore, MemoryRecord};
 use device::{DeviceApi, DeviceVersionSnapshot};
 
@@ -51,6 +51,8 @@ pub struct ApiState {
     pub shared_config: Arc<RwLock<Config>>,
     /// Hot-swappable LLM agent (shared with AiBusServiceImpl).
     pub shared_agent: Arc<RwLock<Arc<LlmAgent>>>,
+    /// Always-on LLM request/response logger.
+    pub llm_request_logger: LlmRequestLogger,
     /// Shared HTTP client for outbound requests.
     pub http_client: HttpClient,
     /// Hot-swappable weather API key (shared with AiBusServiceImpl).
@@ -841,8 +843,12 @@ async fn update_settings(
     if llm_changed {
         // Build the agent (sync) and convert the error to String immediately
         // so that Box<dyn Error> (which isn't Send) doesn't live across .await.
-        let agent_result = LlmAgent::from_config(&config.llm, state.http_client.clone())
-            .map_err(|e| e.to_string());
+        let agent_result = LlmAgent::from_config(
+            &config.llm,
+            state.http_client.clone(),
+            state.llm_request_logger.clone(),
+        )
+        .map_err(|e| e.to_string());
 
         match agent_result {
             Ok(new_agent) => {

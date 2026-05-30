@@ -7,6 +7,7 @@ use tracing::info;
 
 use crate::config::LlmConfig;
 use crate::llm::backend::LlmBackend;
+use crate::llm::request_log::LlmRequestLogger;
 use crate::llm::rig_backend::RigBackend;
 
 pub struct GeminiProvider;
@@ -15,6 +16,7 @@ impl GeminiProvider {
     pub fn build(
         config: &LlmConfig,
         http_client: HttpClient,
+        request_logger: LlmRequestLogger,
     ) -> Result<Arc<dyn LlmBackend>, Box<dyn std::error::Error>> {
         let api_key = config.resolve_api_key().ok_or(
             "Gemini api_key not set; configure GEMINI_API_KEY in the environment or .env, or set llm.api_key in config.toml",
@@ -36,6 +38,6 @@ impl GeminiProvider {
 
         let agent = builder.build();
         info!("Gemini agent ready (model={})", config.model);
-        Ok(RigBackend::arc("Gemini", agent))
+        Ok(RigBackend::arc("Gemini", agent, request_logger))
     }
 }

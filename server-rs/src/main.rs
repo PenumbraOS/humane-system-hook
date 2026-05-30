@@ -100,7 +100,7 @@ use services::wifi_config::WifiConfigServiceImpl;
 use config::Config;
 use db::Database;
 use dedup::DedupRouter;
-use llm::LlmAgent;
+use llm::{LlmAgent, LlmRequestLogger};
 use storage::MediaStore;
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
@@ -287,9 +287,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let http_client = reqwest::Client::builder().tls_backend_native().build()?;
+    let llm_request_log_dir = config
+        .logging
+        .log_dir
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("logs"));
+    let llm_request_logger = LlmRequestLogger::new(llm_request_log_dir);
 
     // Build LLM agent (behind RwLock for hot-reload)
-    let agent = Arc::new(LlmAgent::from_config(&config.llm, http_client.clone())?);
+    let agent = Arc::new(LlmAgent::from_config(
+        &config.llm,
+        http_client.clone(),
+        llm_request_logger.clone(),
+    )?);
     let shared_agent = Arc::new(RwLock::new(agent));
 
     // Resolve PirateWeather API key for weather service (behind RwLock for hot-reload)
@@ -416,6 +427,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config_path,
         shared_config,
         shared_agent,
+        llm_request_logger,
         http_client: http_client.clone(),
         shared_weather_key,
         log_dir: log_dir_for_api,

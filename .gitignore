@@ -25,3 +25,4 @@ server-rs/media/
 **/jniLibs/
 
 **/config.local.toml
+logs/
