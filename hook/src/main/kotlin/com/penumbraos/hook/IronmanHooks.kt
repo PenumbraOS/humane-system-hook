@@ -60,9 +60,6 @@ object IronmanHooks {
         // (HTTP GET to connectivity-check.prod.humane.cloud — cosmetic only)
         ConnectivityCheckBypass.install(cl)
 
-        // Silence Memfault RemoteMetricsService
-        hookRemoteMetricsService(cl)
-
         // Bypass blocking IWlcService.disableTx binder calls
         WirelessChargingBypass.install(cl)
 
@@ -410,51 +407,5 @@ object IronmanHooks {
         }
     }
 
-    /**
-     * Silence Memfault's embedded RemoteMetricsService.
-     *
-     * The Memfault reporting library is compiled into ironman (not in the Bort APK).
-     * It records metrics via record$reporting_lib_release() and periodically
-     * finishes reports via finishReport$reporting_lib_release(). Both call
-     * withRemoteLogger() which looks up the "memfault_structured" binder service.
-     * With the daemon stopped, every call logs:
-     *   "Unable to get a handle to memfault_structured"
-     *
-     * Hook both entry points to no-op, eliminating the binder lookup and log noise.
-     */
-    private fun hookRemoteMetricsService(cl: ClassLoader) {
-        val className = "com.memfault.bort.reporting.RemoteMetricsService"
-        val clazz = try {
-            cl.loadClass(className)
-        } catch (_: ClassNotFoundException) {
-            Log.w(TAG, "  $className not found, skipping RemoteMetrics hook")
-            return
-        }
-
-        // record$reporting_lib_release(MetricValue) -> void
-        try {
-            val metricValueClass = cl.loadClass("com.memfault.bort.reporting.MetricValue")
-            HookUtils.hookMethodBefore(clazz, "record\$reporting_lib_release", arrayOf(metricValueClass)) { param ->
-                param.result = null
-            }
-        } catch (t: Throwable) {
-            Log.w(TAG, "  Failed to hook RemoteMetricsService.record: ${t.message}")
-        }
-
-        // finishReport$reporting_lib_release(String, long, boolean) -> boolean
-        try {
-            HookUtils.hookMethodBefore(
-                clazz,
-                "finishReport\$reporting_lib_release",
-                arrayOf(String::class.java, Long::class.javaPrimitiveType!!, Boolean::class.javaPrimitiveType!!),
-            ) { param ->
-                param.result = false
-            }
-        } catch (t: Throwable) {
-            Log.w(TAG, "  Failed to hook RemoteMetricsService.finishReport: ${t.message}")
-        }
-
-        Log.w(TAG, "  RemoteMetricsService hooks installed (metrics silenced)")
-    }
 
 }

@@ -17,6 +17,6 @@
              Comma-separated Android package names. -->
         <meta-data
             android:name="com.penumbraos.hook.TARGET_PACKAGES"
-            android:value="hu.ma.ne.ironman,humane.experience.dialer,humane.experience.messages,humane.experience.onboarding,humane.experience.photography,hu.ma.ne.krypto,humane.experience.systemnavigation,humane.experience.settings,humane.connectivity.esimlpa" />
+            android:value="hu.ma.ne.ironman,humane.experience.dialer,humane.experience.messages,humane.experience.onboarding,humane.experience.photography,hu.ma.ne.krypto,humane.experience.systemnavigation,humane.experience.settings,humane.connectivity.esimlpa,com.memfault.usagereporter" />
     </application>
 </manifest>

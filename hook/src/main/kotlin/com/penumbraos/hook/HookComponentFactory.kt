@@ -32,6 +32,7 @@ class HookComponentFactory : AppComponentFactory() {
          * Multiple modules can match the same process.
          */
         private val HOOK_MODULES: List<Pair<String, (ClassLoader) -> Unit>> = listOf(
+            "com.memfault.bort.reporting.RemoteMetricsService" to MemfaultReportingHooks::install,
             "humaneinternal.system.MainApplication" to IronmanHooks::install,
             "humaneinternal.system.contacts.ContactsManager" to ContactsHooks::install,
             "humane.addressbook.AddressBookAccess" to InboundFilteringHooks::install,
