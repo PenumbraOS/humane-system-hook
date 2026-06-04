@@ -83,8 +83,6 @@ impl LlmToolContext {
 
         info!(
             dynamic_tool_count = tools_config.dynamic_tool_count,
-            embedding_model = fastembed::EMBEDDED_MODEL_NAME,
-            embedding_revision = fastembed::EMBEDDED_MODEL_REVISION,
             "LLM native dynamic tools ready"
         );
 

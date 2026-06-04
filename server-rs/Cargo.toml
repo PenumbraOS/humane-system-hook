@@ -45,12 +45,12 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 dotenvy = "0.15"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
-fastembed = { version = "=4.9.1", default-features = false, features = ["ort-download-binaries"] }
+fastembed = { version = "=5.8.0", default-features = false, features = ["ort-download-binaries"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 # Android requires openssl to be embedded
 openssl = { version = "*", features = ["vendored"] }
-fastembed = { version = "=4.9.1", default-features = false, features = ["ort-load-dynamic"] }
+fastembed = { version = "=5.8.0", default-features = false, features = ["ort-load-dynamic"] }
 
 [build-dependencies]
 tonic-prost-build = "0.14"
@@ -63,3 +63,4 @@ tempfile = "3"
 
 [patch.crates-io]
 rig-core = { git = "https://github.com/agg23/rig", branch = "gemini-server-tool-passthrough" }
+rig-fastembed = { git = "https://github.com/agg23/rig", branch = "gemini-server-tool-passthrough" }

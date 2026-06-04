@@ -1,10 +1,9 @@
 use fastembed::{
-    EmbeddingModel as FastembedModel, ModelInfo, Pooling, TokenizerFiles, UserDefinedEmbeddingModel,
+    EmbeddingModel as FastembedModel, Pooling, TextEmbedding as FastembedTextEmbedding,
+    TokenizerFiles, UserDefinedEmbeddingModel,
 };
 use rig_fastembed::EmbeddingModel;
 
-pub const EMBEDDED_MODEL_NAME: &str = "Qdrant/all-MiniLM-L6-v2-onnx";
-pub const EMBEDDED_MODEL_REVISION: &str = "5f1b8cd78bc4fb444dd171e59b18f3a3af89a079";
 const MODEL_DIMENSIONS: usize = 384;
 
 pub fn build_embedding_model() -> Result<EmbeddingModel, String> {
@@ -34,15 +33,9 @@ pub fn build_embedding_model() -> Result<EmbeddingModel, String> {
     )
     .with_pooling(Pooling::Mean);
 
-    let model_info = ModelInfo {
-        model: FastembedModel::AllMiniLML6V2,
-        dim: MODEL_DIMENSIONS,
-        description: "Embedded all-MiniLM-L6-v2 ONNX model".to_string(),
-        model_code: EMBEDDED_MODEL_NAME.to_string(),
-        model_file: "model.onnx".to_string(),
-        additional_files: vec![],
-    };
+    let model_info = FastembedTextEmbedding::get_model_info(&FastembedModel::AllMiniLML6V2)
+        .map_err(|err| err.to_string())?;
 
-    EmbeddingModel::new_from_user_defined(user_defined_model, MODEL_DIMENSIONS, &model_info)
+    EmbeddingModel::new_from_user_defined(user_defined_model, MODEL_DIMENSIONS, model_info)
         .map_err(|err| err.to_string())
 }
