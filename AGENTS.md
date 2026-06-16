@@ -1,12 +1,18 @@
 # Agent Context
 
+This project is a set of patches on top of Humane's Ai Pin locked down firmware. While we do not have root access, through a vulnerability we are able to install APKs with `system` level permissions, and thus can inject ourselves directly into `system_service` and therefore every app that starts up afterwards. We set up a base patch injector (`injector/`), which automatically takes installed APKs (only `hook/` for now) with the `com.penumbraos.hook.TARGET_PACKAGES` manifest property, and injects the provided classes into those hook packages.
+
 ## Device Constraints
 
 - No root access. Only system UID (1000) and system_server process access.
 - System SELinux is extremely locked down. Do not assume just because something is doable in AOSP it is doable here.
 - We do NOT have access to set 99% of system properties. Do not suggest setting a prop.
 
-## Decompiled ironman Source
+## Decompiled Humane Source
+
+All decompiled source from the device (Humane apps, libraries, core systems) can be found at `/Users/adam/code/aipin/apk-environment`.
+
+### Example source directories
 
 ```
 /Users/adam/code/aipin/apk-environment/app/src/main/java/
@@ -23,14 +29,6 @@
   humane/aibus/                             — AI Bus gRPC stubs + protobuf messages (467 files)
   humane/grandcentral/                      — GrandCentral service + separate ChannelFactory
   humane/experience/answers/                — Answers experience (RespondActionHandler)
-```
-
-## Injection Framework (This Project)
-
-```
-/Users/adam/code/aipin/openPin/humane-system-hook/
-  hook/       — Loaded into ironman's process (AliuHook; optional Frida Gadget)
-  injector/   — Runs in system_server (PMS mutation via reflection)
 ```
 
 ## Frida Access
