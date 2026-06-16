@@ -20,6 +20,7 @@ use crate::llm::LlmAgent;
 use crate::nearby::NearbyClient;
 use crate::proto::aibus::ai_bus_service_server::AiBusService;
 use crate::proto::aibus::*;
+use crate::synapse::image_store::LiveImageStore;
 
 mod completion;
 mod envelope;
@@ -358,14 +359,17 @@ impl AiBusHanders {
         db: Database,
         memory: Option<MemoryService>,
     ) -> Self {
+        let live_image_store = LiveImageStore::new();
+
         Self {
             understand: UnderstandHandler::new(
                 agent.clone(),
                 config.clone(),
                 db.clone(),
                 memory.clone(),
+                live_image_store.clone(),
             ),
-            vision: VisionHandler::new(agent.clone()),
+            vision: VisionHandler::new(live_image_store),
             weather: WeatherHandler::new(
                 http_client.clone(),
                 config.pirate_weather_api_key.clone(),

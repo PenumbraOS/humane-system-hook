@@ -4,8 +4,6 @@ mod gemini;
 mod openai;
 
 use reqwest::Client as HttpClient;
-use rig::completion::message::{ImageMediaType, Message, UserContent};
-use rig::OneOrMany;
 use std::sync::Arc;
 
 use crate::config::{LlmProvider, ResolvedConfig};
@@ -34,19 +32,5 @@ pub async fn build_backend(
         LlmProvider::OpenAi | LlmProvider::OpenAiCompatible => {
             OpenAiProvider::build(config, http_client, request_logger, memory).await
         }
-    }
-}
-
-pub fn vision_message(question: &str, image_base64: &str) -> Message {
-    Message::User {
-        content: OneOrMany::many(vec![
-            UserContent::text(question),
-            UserContent::image_base64(
-                image_base64,
-                Some(ImageMediaType::JPEG),
-                None, // detail: auto
-            ),
-        ])
-        .expect("non-empty content vec"),
     }
 }

@@ -4,6 +4,7 @@ use futures::StreamExt;
 use prost::Message as _;
 use rig::completion::message::Message;
 use tokio_stream::Stream;
+use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
 use tracing::{debug, info, warn};
 
@@ -13,17 +14,21 @@ use super::envelope::unwrap_plaintext_data;
 use crate::config::ResolvedConfig;
 use crate::db::Database;
 use crate::llm::memory::MemoryService;
+use crate::llm::ChatResult;
 use crate::llm::{LlmAgent, LlmChatRequest, PromptTemplateContext, PromptTemplates};
 use crate::proto::aibus::*;
 use crate::proto::common::encryption::{self, EncryptedData};
 use crate::synapse::conversation::extract_history;
-use crate::synapse::vision::{extract_vision_observation, is_vision_request};
+use crate::synapse::extract_run_id;
+use crate::synapse::image_store::LiveImageStore;
+use crate::synapse::vision::{extract_most_recent_image_data, is_vision_request};
 
 pub struct UnderstandHandler {
     agent: Arc<LlmAgent>,
     config: Arc<ResolvedConfig>,
     db: Database,
     memory: Option<MemoryService>,
+    image_store: LiveImageStore,
 }
 
 impl UnderstandHandler {
@@ -32,12 +37,14 @@ impl UnderstandHandler {
         config: Arc<ResolvedConfig>,
         db: Database,
         memory: Option<MemoryService>,
+        image_store: LiveImageStore,
     ) -> Self {
         Self {
             agent,
             config,
             db,
             memory,
+            image_store,
         }
     }
 
@@ -97,9 +104,96 @@ impl UnderstandHandler {
         });
     }
 
+    /// Call a configured agent with the given conversation context
+    async fn evaluate_agent_conversation(
+        &self,
+        req: &SynapseUnderstandingRequest,
+        run_id: &str,
+        utterance: &str,
+        history: &[Message],
+        image: Option<Vec<u8>>,
+        log_name: &str,
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<SynapseUnderstandingResponse, Status>> + Send>>,
+        Status,
+    > {
+        let does_have_image = image.is_some();
+
+        let templates = PromptTemplates {
+            system_prompt: self.config.config.server.system_prompt.clone(),
+            status_prompt: self.config.config.server.status_prompt.clone(),
+        };
+
+        let template_context = self.build_prompt_template_context(req, run_id, &self.config);
+        let memory_context = if let Some(memory) = &self.memory {
+            match memory.retrieve_context(utterance.to_string()).await {
+                Ok(context) => context,
+                Err(error) => {
+                    warn!(error = %error, "memory retrieval failed");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let mut chat_request = LlmChatRequest::new(
+            utterance.to_string(),
+            history.to_vec(),
+            templates,
+            template_context,
+            memory_context,
+        );
+
+        if let Some(image_bytes) = image {
+            chat_request = chat_request.with_image(image_bytes);
+        }
+
+        match self.agent.chat(chat_request).await {
+            Ok(ChatResult::Text(response_text)) => {
+                info!(response = %response_text, "<<< {log_name} responding");
+                self.spawn_save_conversation(
+                    run_id,
+                    utterance,
+                    does_have_image,
+                    history,
+                    &response_text,
+                );
+                let response = SynapseUnderstandingResponse::action_response(
+                    "Respond",
+                    "I should respond to the user",
+                    &serde_json::json!({"Response": response_text}).to_string(),
+                    run_id,
+                );
+                Ok(Box::pin(tokio_stream::once(Ok(response))))
+            }
+            Ok(ChatResult::DeferredVision) => {
+                info!("<<< LLM requested vision, returning UnderstandScene");
+                let response = SynapseUnderstandingResponse::action_response(
+                    "UnderstandScene",
+                    "I should look at what the user is seeing",
+                    &serde_json::json!({"Question": utterance}).to_string(),
+                    run_id,
+                );
+                Ok(Box::pin(tokio_stream::once(Ok(response))))
+            }
+            Err(error) => {
+                warn!(error = %error, "LLM chat failed, falling back to error message");
+                self.spawn_save_conversation(run_id, utterance, does_have_image, history, &error);
+                let response = SynapseUnderstandingResponse::action_response(
+                    "Respond",
+                    "I encountered an error",
+                    &serde_json::json!({"Response": error}).to_string(),
+                    run_id,
+                );
+                Ok(Box::pin(tokio_stream::once(Ok(response))))
+            }
+        }
+    }
+
     async fn understand_inner(
         &self,
-        metadata: tonic::metadata::MetadataMap,
+        metadata: MetadataMap,
         req: SynapseUnderstandingRequest,
         log_name: &str,
     ) -> Result<
@@ -107,11 +201,7 @@ impl UnderstandHandler {
         Status,
     > {
         let utterance = &req.utterance;
-        let run_id = metadata
-            .get("x-ai-mic-run-id")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("unknown")
-            .to_string();
+        let run_id = extract_run_id(&metadata);
 
         info!(run_id = %run_id, utterance = %utterance, ">>> {log_name}");
 
@@ -142,7 +232,7 @@ impl UnderstandHandler {
                 };
                 debug!(idx = i, kind = kind, user = ?turn.user(), "    turn");
             }
-            let h = extract_history(ctx);
+            let h = extract_history(ctx, &self.image_store).await;
             if !h.is_empty() {
                 info!(messages = h.len(), "    extracted history");
             }
@@ -151,26 +241,42 @@ impl UnderstandHandler {
             (Vec::new(), None)
         };
 
-        if let Some(ref loc) = req.location {
-            info!(lat = loc.latitude, lon = loc.longitude, "    location");
-        }
-
-        if let Some(ctx) = ctx {
-            if let Some(observation_text) = extract_vision_observation(ctx) {
-                info!(observation = %observation_text, "<<< Vision round-trip complete, responding");
-
-                self.spawn_save_conversation(&run_id, utterance, true, &history, &observation_text);
-
-                let response = SynapseUnderstandingResponse::action_response(
-                    "Respond",
-                    "I analyzed the image and should share my observation with the user",
-                    &serde_json::json!({"Response": observation_text}).to_string(),
-                    &run_id,
+        if let Some(ctx) = &ctx {
+            // image_data attached inline by a device hook
+            // This is only accessible if our modified hook code does this
+            if let Some(image_bytes) = extract_most_recent_image_data(ctx) {
+                info!(
+                    image_bytes = image_bytes.len(),
+                    "<<< Inline image data in Understand request, running chat with image"
                 );
-
-                return Ok(Box::pin(tokio_stream::once(Ok(response))));
+                return self
+                    .evaluate_agent_conversation(
+                        &req,
+                        &run_id,
+                        utterance,
+                        &history,
+                        Some(image_bytes),
+                        log_name,
+                    )
+                    .await;
             }
 
+            // A previous turn called AnalyzeImage and stored an image for us to retrieve in this step
+            if let Some(image_bytes) = self.image_store.get_refresh(&run_id).await {
+                info!(run_id = %run_id, image_bytes = image_bytes.len(), "<<< Have stored image for current run, running chat with image");
+                return self
+                    .evaluate_agent_conversation(
+                        &req,
+                        &run_id,
+                        utterance,
+                        &history,
+                        Some(image_bytes),
+                        log_name,
+                    )
+                    .await;
+            }
+
+            // Explicit vision request
             if is_vision_request(ctx) {
                 info!("<<< Vision request detected, returning UnderstandScene");
 
@@ -185,50 +291,9 @@ impl UnderstandHandler {
             }
         }
 
-        let templates = PromptTemplates {
-            system_prompt: self.config.config.server.system_prompt.clone(),
-            status_prompt: self.config.config.server.status_prompt.clone(),
-        };
-        let template_context = self.build_prompt_template_context(&req, &run_id, &self.config);
-        let memory_context = if let Some(memory) = &self.memory {
-            match memory.retrieve_context(utterance.clone()).await {
-                Ok(context) => context,
-                Err(error) => {
-                    warn!(error = %error, "memory retrieval failed");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-        let chat_request = LlmChatRequest::new(
-            utterance.clone(),
-            history.clone(),
-            templates,
-            template_context,
-            memory_context,
-        );
-
-        let response_text = match self.agent.chat(chat_request).await {
-            Ok(text) => text,
-            Err(error) => {
-                warn!(error = %error, "LLM chat failed, falling back to error message");
-                error
-            }
-        };
-
-        info!(response = %response_text, "<<< {log_name} responding");
-
-        self.spawn_save_conversation(&run_id, utterance, false, &history, &response_text);
-
-        let response = SynapseUnderstandingResponse::action_response(
-            "Respond",
-            "I should respond to the user",
-            &serde_json::json!({"Response": response_text}).to_string(),
-            &run_id,
-        );
-
-        Ok(Box::pin(tokio_stream::once(Ok(response))))
+        // No images found in context, do a normal chat
+        self.evaluate_agent_conversation(&req, &run_id, utterance, &history, None, log_name)
+            .await
     }
 
     pub async fn understand(

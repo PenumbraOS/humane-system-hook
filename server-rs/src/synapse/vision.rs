@@ -11,25 +11,17 @@ pub fn is_vision_request(ctx: &SynapseDeviceContext) -> bool {
     false
 }
 
-/// Extract the observation text from a completed UnderstandScene round-trip.
-pub fn extract_vision_observation(ctx: &SynapseDeviceContext) -> Option<String> {
-    let mut candidate: Option<String> = None;
+/// Extract raw image bytes from the latest UserRequest in the device context.
+///
+/// This image is only populated if the request is preceded by an AnalyzeImage call
+pub fn extract_most_recent_image_data(ctx: &SynapseDeviceContext) -> Option<Vec<u8>> {
     for turn in ctx.turns.iter().rev() {
-        match &turn.content {
-            Some(synapse_chat_turn::Content::Observation(obs)) => {
-                if candidate.is_none() && !obs.is_final && !obs.observation.trim().is_empty() {
-                    candidate = Some(obs.observation.trim().to_string());
-                }
+        if let Some(synapse_chat_turn::Content::UserRequest(req)) = &turn.content {
+            if !req.image_data.is_empty() {
+                return Some(req.image_data.clone());
             }
-            Some(synapse_chat_turn::Content::Action(action)) => {
-                if action.action == "UnderstandScene" && candidate.is_some() {
-                    return candidate;
-                }
-            }
-            // Anything before the last UserRequest belongs to a previous conversation run and should be ignored
-            Some(synapse_chat_turn::Content::UserRequest(_)) => break,
-            _ => {}
         }
     }
+
     None
 }

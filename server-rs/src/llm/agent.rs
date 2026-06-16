@@ -5,6 +5,7 @@ use tracing::info;
 
 use crate::config::ResolvedConfig;
 
+use super::ChatResult;
 use super::backend::LlmBackend;
 use super::memory::MemoryService;
 use super::providers;
@@ -33,16 +34,7 @@ impl LlmAgent {
     }
 
     /// Send a prompt with request-scoped conversation and system prompt context to the LLM.
-    pub async fn chat(&self, request: LlmChatRequest) -> Result<String, String> {
+    pub async fn chat(&self, request: LlmChatRequest) -> Result<ChatResult, String> {
         self.backend.chat(request).await
-    }
-
-    /// Send a vision prompt with an image (base64-encoded JPEG) and a question.
-    pub async fn vision_prompt(
-        &self,
-        question: &str,
-        image_base64: &str,
-    ) -> Result<String, String> {
-        self.backend.vision_prompt(question, image_base64).await
     }
 }

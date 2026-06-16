@@ -6,6 +6,7 @@ use tracing::{info, warn};
 
 use super::envelope::unwrap_plaintext_data;
 use crate::config::ResolvedConfig;
+use crate::llm::ChatResult;
 use crate::llm::memory::MemoryService;
 use crate::llm::{LlmAgent, LlmChatRequest, PromptTemplateContext, PromptTemplates};
 use crate::proto::aibus::*;
@@ -70,7 +71,7 @@ impl CompletionHandler {
             ">>> EncryptedChatCompletion"
         );
         let memory_context = self.retrieve_memory_context(&prompt).await;
-        let response_text = self
+        let response_text = match self
             .agent
             .chat(LlmChatRequest::new(
                 prompt,
@@ -87,10 +88,17 @@ impl CompletionHandler {
                 memory_context,
             ))
             .await
-            .unwrap_or_else(|error| {
+        {
+            Ok(ChatResult::Text(text)) => text,
+            Ok(ChatResult::DeferredVision) => {
+                warn!("EncryptedChatCompletion triggered vision tool (unexpected)");
+                "I can't capture an image in this context.".to_string()
+            }
+            Err(error) => {
                 warn!(error = %error, "EncryptedChatCompletion LLM failed");
                 error
-            });
+            }
+        };
 
         let chat_response = ChatCompletionResponse {
             choices: vec![Choice {
@@ -130,7 +138,7 @@ impl CompletionHandler {
         );
         let prompt = completion_req.prompt;
         let memory_context = self.retrieve_memory_context(&prompt).await;
-        let response_text = self
+        let response_text = match self
             .agent
             .chat(LlmChatRequest::new(
                 prompt,
@@ -147,10 +155,17 @@ impl CompletionHandler {
                 memory_context,
             ))
             .await
-            .unwrap_or_else(|error| {
+        {
+            Ok(ChatResult::Text(text)) => text,
+            Ok(ChatResult::DeferredVision) => {
+                warn!("EncryptedCompletion triggered vision tool (unexpected)");
+                "I can't capture an image in this context.".to_string()
+            }
+            Err(error) => {
                 warn!(error = %error, "EncryptedCompletion LLM failed");
                 error
-            });
+            }
+        };
 
         let completion_response = CompletionResponse {
             choices: vec![CompletionChoice {

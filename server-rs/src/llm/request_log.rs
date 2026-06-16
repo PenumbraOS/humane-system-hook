@@ -58,33 +58,6 @@ impl LlmRequestLogger {
         self.append_record(&record).await;
     }
 
-    pub async fn log_vision(
-        &self,
-        provider: &str,
-        question: &str,
-        image_base64_len: usize,
-        response: Option<&str>,
-        error: Option<&str>,
-        latency_ms: u128,
-    ) {
-        let record = VisionLogRecord {
-            timestamp: timestamp(),
-            provider,
-            kind: "vision",
-            latency_ms,
-            request: VisionLogRequest {
-                question: question.to_string(),
-                image_base64_len,
-            },
-            response: response.map(|content| LogResponse {
-                content: content.to_string(),
-            }),
-            error: error.map(ToOwned::to_owned),
-        };
-
-        self.append_record(&record).await;
-    }
-
     async fn append_record<T>(&self, record: &T)
     where
         T: Serialize + ?Sized,
@@ -183,25 +156,6 @@ struct ChatLogRecord<'a> {
 #[derive(Serialize)]
 struct ChatLogRequest {
     messages: Vec<LogMessage>,
-}
-
-#[derive(Serialize)]
-struct VisionLogRecord<'a> {
-    timestamp: String,
-    provider: &'a str,
-    kind: &'static str,
-    latency_ms: u128,
-    request: VisionLogRequest,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    response: Option<LogResponse>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
-#[derive(Serialize)]
-struct VisionLogRequest {
-    question: String,
-    image_base64_len: usize,
 }
 
 #[derive(Serialize)]

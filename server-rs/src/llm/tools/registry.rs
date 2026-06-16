@@ -19,6 +19,7 @@ use crate::nearby::NearbyClient;
 use super::fastembed;
 use super::nearby_search::NearbySearchTool;
 use super::reverse_geocode::ReverseGeocodeTool;
+use super::understand_scene::UnderstandSceneTool;
 use super::weather::WeatherTool;
 
 #[derive(Clone)]
@@ -63,7 +64,8 @@ impl LlmToolContext {
 
         let builder = ToolSet::builder()
             .dynamic_tool(NearbySearchTool::new(self.nearby_client.clone()))
-            .dynamic_tool(ReverseGeocodeTool::new(self.osm.clone()));
+            .dynamic_tool(ReverseGeocodeTool::new(self.osm.clone()))
+            .dynamic_tool(UnderstandSceneTool);
 
         let builder = if self.weather.is_configured() {
             builder.dynamic_tool(WeatherTool::new(self.weather.clone()))

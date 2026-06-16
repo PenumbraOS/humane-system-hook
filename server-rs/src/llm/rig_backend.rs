@@ -2,23 +2,62 @@ use std::time::Instant;
 
 use std::sync::Arc;
 
+use base64::Engine as _;
 use reqwest::Client as HttpClient;
-use rig::agent::{Agent, AgentBuilder, PromptHook};
+use rig::agent::{Agent, AgentBuilder, HookAction, PromptHook};
 use rig::client::CompletionClient;
+use rig::completion::message::{AssistantContent, ImageMediaType, Message, UserContent};
 use rig::completion::CompletionModel;
-use rig::completion::{Message, Prompt};
+use rig::completion::Prompt;
+use rig::completion::{CompletionResponse, PromptError};
+use rig::tool::Tool;
+use rig::OneOrMany;
 use tracing::error;
 
 use crate::config::ResolvedConfig;
+use crate::llm::ChatResult;
 
 use super::backend::{LlmBackend, LlmFuture};
 use super::error::friendly_error_message;
 use super::memory::MemoryService;
 use super::prompt::PromptBuilder;
-use super::providers::vision_message;
 use super::request::LlmChatRequest;
 use super::request_log::LlmRequestLogger;
 use super::tools::registry::LlmToolContext;
+use super::tools::understand_scene::UnderstandSceneTool;
+
+/// Marker for a termination due to device vision request
+const DEFERRED_VISION_SENTINEL: &str = "__HUMANE_DEFERRED_VISION__";
+
+/// Rig hook to prevent execution of the `understand_scene` tool. The returned termination value
+/// is used to trigger a DeferredVision response to the client
+#[derive(Clone)]
+struct DeferredVisionHook;
+
+impl<M> PromptHook<M> for DeferredVisionHook
+where
+    M: CompletionModel,
+{
+    async fn on_completion_response(
+        &self,
+        _prompt: &Message,
+        response: &CompletionResponse<M::Response>,
+    ) -> HookAction {
+        let selected_vision = response.choice.iter().any(|content| {
+            matches!(
+                content,
+                AssistantContent::ToolCall(call)
+                    if call.function.name == UnderstandSceneTool::NAME
+            )
+        });
+
+        if selected_vision {
+            HookAction::terminate(DEFERRED_VISION_SENTINEL)
+        } else {
+            HookAction::cont()
+        }
+    }
+}
 
 /// Shared LLM backend for providers
 pub struct RigBackend<M>
@@ -93,19 +132,44 @@ where
             let history = PromptBuilder::build_chat_history(&request);
             let started = Instant::now();
 
-            let result = self
+            let content = if let Some(image_bytes) = &request.image {
+                OneOrMany::many(vec![
+                    UserContent::text(utterance.clone()),
+                    UserContent::image_base64(
+                        &base64::engine::general_purpose::STANDARD.encode(image_bytes),
+                        Some(ImageMediaType::JPEG),
+                        None,
+                    ),
+                ])
+                .expect("non-empty content vec")
+            } else {
+                OneOrMany::one(UserContent::text(utterance.clone()))
+            };
+
+            let user_message = Message::User { content };
+
+            let raw_result = self
                 .agent
-                .prompt(Message::user(utterance.clone()))
+                .prompt(user_message)
                 .with_history(history.clone())
                 .max_turns(self.max_tool_turns)
                 .with_tool_concurrency(self.tool_concurrency.max(1))
+                .with_hook(DeferredVisionHook)
                 .await;
             let latency_ms = started.elapsed().as_millis();
 
-            let result = result.map_err(|e| {
-                error!(provider = self.provider_label, error = %e, "LLM chat failed");
-                friendly_error_message(&e)
-            });
+            let result = match raw_result {
+                Ok(text) => Ok(ChatResult::Text(text)),
+                Err(PromptError::PromptCancelled { reason, .. })
+                    if reason == DEFERRED_VISION_SENTINEL =>
+                {
+                    Ok(ChatResult::DeferredVision)
+                }
+                Err(e) => {
+                    error!(provider = self.provider_label, error = %e, "LLM chat failed");
+                    Err(friendly_error_message(&e))
+                }
+            };
 
             self.request_logger
                 .log_chat(
@@ -113,36 +177,11 @@ where
                     &run_id,
                     &history,
                     &utterance,
-                    result.clone().ok().as_deref(),
-                    result.clone().err().as_deref(),
-                    latency_ms,
-                )
-                .await;
-
-            result
-        })
-    }
-
-    fn vision_prompt<'a>(&'a self, question: &'a str, image_base64: &'a str) -> LlmFuture<'a> {
-        Box::pin(async move {
-            let started = Instant::now();
-            let result = self
-                .agent
-                .prompt(vision_message(question, image_base64))
-                .await;
-            let latency_ms = started.elapsed().as_millis();
-
-            let result = result.map_err(|e| {
-                error!(provider = self.provider_label, error = %e, "LLM vision prompt failed");
-                friendly_error_message(&e)
-            });
-
-            self.request_logger
-                .log_vision(
-                    self.provider_label,
-                    question,
-                    image_base64.len(),
-                    result.clone().ok().as_deref(),
+                    match &result {
+                        Ok(ChatResult::Text(text)) => Some(text.as_str()),
+                        Ok(ChatResult::DeferredVision) => None,
+                        Err(_) => None,
+                    },
                     result.clone().err().as_deref(),
                     latency_ms,
                 )
