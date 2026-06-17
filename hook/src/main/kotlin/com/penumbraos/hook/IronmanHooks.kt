@@ -29,6 +29,10 @@ object IronmanHooks {
         // crash-loops before ChannelFactory hooks ever get a chance to run.
         hookCredentialManager(cl)
 
+        // Replace Humane's indefinite hand-tracking holds with a short,
+        // configurable timeout that only starts from touchpad activity
+        HandTrackingTimeoutHooks.install(cl)
+
         // Redirect all gRPC traffic to mock server
         ChannelFactoryBypass.install(cl)
 
