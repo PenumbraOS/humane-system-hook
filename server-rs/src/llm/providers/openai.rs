@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
 use reqwest::Client as HttpClient;
-use rig::agent::AgentBuilder;
-use rig::client::CompletionClient;
 use rig::providers;
-use rig::providers::openai::responses_api::ResponsesToolDefinition;
 use tracing::info;
 
 use crate::config::{LlmProvider, ResolvedConfig};
@@ -29,7 +26,10 @@ impl OpenAiProvider {
 
         // Only real OpenAI (not "openai-compatible" custom endpoints) supports the
         // Responses API and its hosted web_search tool.
-        if llm_config.provider == LlmProvider::OpenAi && llm_config.web_search {
+        let web_search_enabled =
+            llm_config.provider == LlmProvider::OpenAi && llm_config.web_search;
+
+        if web_search_enabled {
             let mut builder = providers::openai::Client::builder()
                 .api_key(&api_key)
                 .http_client(http_client.clone());
@@ -43,18 +43,18 @@ impl OpenAiProvider {
                 llm_config.model
             );
 
-            let model = client
-                .completion_model(&llm_config.model)
-                .with_tool(ResponsesToolDefinition::web_search());
-            let agent_builder = AgentBuilder::new(model);
-
-            RigBackend::from_agent_builder(
+            RigBackend::from_client(
                 "OpenAI",
-                agent_builder,
+                client,
                 request_logger,
                 config,
                 http_client,
                 memory,
+                |builder| {
+                    builder.additional_params(serde_json::json!({
+                        "tools": [{ "type": "web_search" }]
+                    }))
+                },
             )
             .await
         } else {
