@@ -30,7 +30,7 @@ impl OpenAiProvider {
         // Only real OpenAI (not "openai-compatible" custom endpoints) supports the
         // Responses API and its hosted web_search tool.
         let web_search_enabled =
-            llm_config.provider == LlmProvider::OpenAi && llm_config.openai_web_search;
+            llm_config.provider == LlmProvider::OpenAi && llm_config.web_search;
 
         if web_search_enabled {
             let mut builder = providers::openai::Client::builder()

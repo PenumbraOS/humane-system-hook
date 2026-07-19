@@ -84,15 +84,12 @@ pub struct LlmConfig {
     /// Base URL — only used for "openai-compatible" provider.
     pub base_url: Option<String>,
 
-    /// When provider == "gemini", enable Google's built-in Search grounding tool.
-    /// No effect for other providers.
+    /// Enable provider-hosted web search grounding when the selected provider
+    /// supports it: Google's Search grounding for "gemini", or OpenAI's hosted
+    /// web_search tool (via the Responses API) for "openai". No effect for
+    /// "anthropic", "openai-compatible", or "echo".
     #[serde(default)]
-    pub gemini_google_search: bool,
-
-    /// When provider == "openai" (not "openai-compatible"), enable OpenAI's
-    /// hosted web_search tool via the Responses API. No effect for other providers.
-    #[serde(default)]
-    pub openai_web_search: bool,
+    pub web_search: bool,
 
     /// Server-local native LLM tools.
     #[serde(default)]
@@ -346,8 +343,7 @@ impl Default for LlmConfig {
             model: default_model(),
             api_key: None,
             base_url: None,
-            gemini_google_search: false,
-            openai_web_search: false,
+            web_search: false,
             tools: LlmToolsConfig::default(),
             memory: LlmMemoryConfig::default(),
         }
