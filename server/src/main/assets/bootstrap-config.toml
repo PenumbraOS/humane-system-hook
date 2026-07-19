@@ -1,7 +1,7 @@
 [llm]
 provider = "echo"
 model = "gemini-2.5-flash"
-gemini_google_search = false
+web_search = false
 
 [llm.memory]
 path = "__APP_MEMORY_PATH__"
