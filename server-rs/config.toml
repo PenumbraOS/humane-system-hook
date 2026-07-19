@@ -4,6 +4,7 @@ model = "gemini-2.5-flash"   # model ID for the provider
 # api_key = "..."            # optional, overrides env var
 # base_url = "..."           # optional, for openai-compatible providers
 # gemini_google_search = true # enable built-in Google Search grounding (Gemini only)
+# openai_web_search = true    # enable hosted web_search tool (OpenAI only, not openai-compatible)
 
 [llm.tools]
 enabled = true

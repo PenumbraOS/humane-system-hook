@@ -89,6 +89,11 @@ pub struct LlmConfig {
     #[serde(default)]
     pub gemini_google_search: bool,
 
+    /// When provider == "openai" (not "openai-compatible"), enable OpenAI's
+    /// hosted web_search tool via the Responses API. No effect for other providers.
+    #[serde(default)]
+    pub openai_web_search: bool,
+
     /// Server-local native LLM tools.
     #[serde(default)]
     pub tools: LlmToolsConfig,
@@ -342,6 +347,7 @@ impl Default for LlmConfig {
             api_key: None,
             base_url: None,
             gemini_google_search: false,
+            openai_web_search: false,
             tools: LlmToolsConfig::default(),
             memory: LlmMemoryConfig::default(),
         }

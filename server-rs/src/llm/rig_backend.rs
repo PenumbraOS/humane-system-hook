@@ -90,8 +90,23 @@ where
         C: CompletionClient<CompletionModel = M>,
         F: FnOnce(AgentBuilder<M>) -> AgentBuilder<M>,
     {
+        let builder = customize_builder(client.agent(&config.config.llm.model));
+        Self::from_agent_builder(provider_label, builder, request_logger, config, http_client, memory)
+            .await
+    }
+
+    /// Like `from_client`, but for providers that need to configure the
+    /// underlying completion model directly (e.g. attaching provider-hosted
+    /// tools) before it's wrapped in an `AgentBuilder`.
+    pub async fn from_agent_builder(
+        provider_label: &'static str,
+        builder: AgentBuilder<M>,
+        request_logger: LlmRequestLogger,
+        config: &ResolvedConfig,
+        http_client: HttpClient,
+        memory: Option<MemoryService>,
+    ) -> Result<Arc<dyn LlmBackend>, Box<dyn std::error::Error + Send + Sync>> {
         let llm_config = &config.config.llm;
-        let builder = customize_builder(client.agent(&llm_config.model));
 
         let tool_resources = if llm_config.tools.enabled {
             let tool_context = LlmToolContext::new(http_client, config, memory);

@@ -26,7 +26,11 @@ impl Tool for UnderstandSceneTool {
                 This will trigger the device camera to take a picture and send it to you for \
                 analysis."
                 .to_string(),
-            parameters: json!(null),
+            parameters: json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
         }
     }
 
