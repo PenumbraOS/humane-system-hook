@@ -84,10 +84,7 @@ pub struct LlmConfig {
     /// Base URL — only used for "openai-compatible" provider.
     pub base_url: Option<String>,
 
-    /// Enable provider-hosted web search grounding when the selected provider
-    /// supports it: Google's Search grounding for "gemini", or OpenAI's hosted
-    /// web_search tool (via the Responses API) for "openai". No effect for
-    /// "anthropic", "openai-compatible", or "echo".
+    /// Enable provider-hosted web search grounding (currently only Gemini and OpenAI)
     #[serde(default)]
     pub web_search: bool,
 

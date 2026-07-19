@@ -95,9 +95,6 @@ where
             .await
     }
 
-    /// Like `from_client`, but for providers that need to configure the
-    /// underlying completion model directly (e.g. attaching provider-hosted
-    /// tools) before it's wrapped in an `AgentBuilder`.
     pub async fn from_agent_builder(
         provider_label: &'static str,
         builder: AgentBuilder<M>,

@@ -3,7 +3,7 @@ provider = "gemini"          # "gemini", "anthropic", "openai", "openai-compatib
 model = "gemini-2.5-flash"   # model ID for the provider
 # api_key = "..."            # optional, overrides env var
 # base_url = "..."           # optional, for openai-compatible providers
-# web_search = true            # enable web search grounding (Gemini's Google Search, or OpenAI's hosted web_search — no effect for other providers)
+# web_search = true          # enable web search grounding (Gemini and OpenAI only)
 
 [llm.tools]
 enabled = true
