@@ -159,7 +159,7 @@ where
             let latency_ms = started.elapsed().as_millis();
 
             let result = match raw_result {
-                Ok(text) => Ok(ChatResult::Text(text)),
+                Ok(text) => Ok(ChatResult::Text(crate::util::clean_for_speech(&text))),
                 Err(PromptError::PromptCancelled { reason, .. })
                     if reason == DEFERRED_VISION_SENTINEL =>
                 {

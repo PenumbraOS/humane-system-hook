@@ -43,6 +43,8 @@ axum = { version = "0.8", features = ["multipart"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "form", "native-tls"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 dotenvy = "0.15"
+regex = "1"
+pulldown-cmark = { version = "0.13", default-features = false }
 memvid-core = { version = "=2.0.140", default-features = false, features = ["lex", "vec"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
