@@ -5,6 +5,7 @@
 
 mod contacts;
 
+use chrono::{Duration, Utc};
 pub use contacts::{ContactImportError, ContactRecord};
 
 use std::path::Path;
@@ -14,7 +15,10 @@ use rig::completion::message::{AssistantContent, Message, UserContent};
 use rusqlite::{params, Connection};
 use tracing::{info, warn};
 
-use crate::storage::{Location, MemoryRecord, MemoryStatus};
+use crate::storage::{
+    ConversationDetail, ConversationMessage, ConversationSummary, Location, MemoryRecord,
+    MemoryStatus,
+};
 
 // ─── Schema ─────────────────────────────────────────────────────────
 
@@ -59,6 +63,7 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
     seq             INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_conv_messages_conv ON conversation_messages(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_created ON conversations(created_at DESC);
 "#;
 
 /// Thread-safe handle to the SQLite database.
@@ -310,21 +315,24 @@ impl Database {
         let messages: Vec<(String, String)> = messages.to_vec();
 
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().map_err(|e| format!("lock: {e}"))?;
+            let mut conn = conn.lock().map_err(|e| format!("lock: {e}"))?;
+            let tx = conn.transaction()?;
 
-            conn.execute(
+            tx.execute(
                 "INSERT INTO conversations (run_id, utterance, is_vision) VALUES (?1, ?2, ?3)",
                 params![run_id, utterance, is_vision as i32],
             )?;
-            let conversation_id = conn.last_insert_rowid();
+            let conversation_id = tx.last_insert_rowid();
 
             for (seq, (role, content)) in messages.iter().enumerate() {
-                conn.execute(
+                tx.execute(
                     "INSERT INTO conversation_messages (conversation_id, role, content, seq)
                      VALUES (?1, ?2, ?3, ?4)",
                     params![conversation_id, role, content, seq as i64],
                 )?;
             }
+
+            tx.commit()?;
 
             Ok(conversation_id)
         })
@@ -333,8 +341,7 @@ impl Database {
 
     /// Persist an Understand conversation from rig [`Message`] history.
     ///
-    /// Extracts text from the rig message types, appends the current utterance and
-    /// LLM response, then delegates to [`save_conversation`].
+    /// Merges this converation with existing ones matching a predicate indicating the last message
     pub async fn save_understand_conversation(
         &self,
         run_id: &str,
@@ -345,11 +352,183 @@ impl Database {
     ) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
         let mut pairs = messages_to_pairs(history);
 
+        // Grab the last non-system message from history
+        let prev_message =
+            pairs
+                .iter()
+                .rev()
+                .find(|(role, _)| role != "system")
+                .map(|(role, content)| {
+                    let seq = pairs
+                        .iter()
+                        .position(|(r, c)| r == role && c == content)
+                        .unwrap_or(0) as i64;
+                    (role.clone(), content.clone(), seq)
+                });
+
         pairs.push(("user".into(), utterance.to_string()));
         pairs.push(("assistant".into(), response_text.to_string()));
 
-        self.save_conversation(run_id, utterance, is_vision, &pairs)
-            .await
+        let conn = self.conn.clone();
+        let run_id = run_id.to_string();
+        let utterance = utterance.to_string();
+        let messages: Vec<(String, String)> = pairs;
+
+        tokio::task::spawn_blocking(move || {
+            let mut conn = conn.lock().map_err(|e| format!("lock: {e}"))?;
+            let tx = conn.transaction()?;
+
+            // Look for a matching previous message in a recent conversation.
+            let existing_id: Option<i64> =
+                if let Some((prev_role, prev_content, prev_seq)) = &prev_message {
+                    let cutoff = Utc::now()
+                        .checked_sub_signed(Duration::minutes(10))
+                        .unwrap_or_else(Utc::now)
+                        .timestamp();
+
+                    tx.query_row(
+                        "SELECT c.id FROM conversations c
+                        JOIN conversation_messages cm ON cm.conversation_id = c.id
+                        WHERE cm.role = ?1 AND cm.content = ?2 AND cm.seq = ?3
+                            AND CAST(c.created_at AS INTEGER) >= ?4
+                        ORDER BY c.created_at DESC
+                        LIMIT 1",
+                        params![prev_role, prev_content, prev_seq, cutoff],
+                        |row| row.get(0),
+                    )
+                    .ok()
+                } else {
+                    None
+                };
+
+            if let Some(id) = existing_id {
+                // Merge into existing conversation.
+                tx.execute(
+                    "DELETE FROM conversation_messages WHERE conversation_id = ?1",
+                    params![id],
+                )?;
+
+                for (seq, (role, content)) in messages.iter().enumerate() {
+                    tx.execute(
+                        "INSERT INTO conversation_messages (conversation_id, role, content, seq)
+                         VALUES (?1, ?2, ?3, ?4)",
+                        params![id, role, content, seq as i64],
+                    )?;
+                }
+
+                tx.commit()?;
+
+                Ok(id)
+            } else {
+                // No match, add new row
+                tx.execute(
+                    "INSERT INTO conversations (run_id, utterance, is_vision) VALUES (?1, ?2, ?3)",
+                    params![run_id, utterance, is_vision as i32],
+                )?;
+                let conversation_id = tx.last_insert_rowid();
+
+                for (seq, (role, content)) in messages.iter().enumerate() {
+                    tx.execute(
+                        "INSERT INTO conversation_messages (conversation_id, role, content, seq)
+                         VALUES (?1, ?2, ?3, ?4)",
+                        params![conversation_id, role, content, seq as i64],
+                    )?;
+                }
+
+                tx.commit()?;
+
+                Ok(conversation_id)
+            }
+        })
+        .await?
+    }
+
+    /// List conversations with pagination
+    pub async fn list_conversations(
+        &self,
+        offset: i64,
+        limit: i64,
+    ) -> Result<Vec<ConversationSummary>, Box<dyn std::error::Error + Send + Sync>> {
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock().map_err(|e| format!("lock: {e}"))?;
+            let mut stmt = conn.prepare(
+                "SELECT id, run_id, created_at, utterance, is_vision
+                 FROM conversations
+                 ORDER BY created_at DESC
+                 LIMIT ?1 OFFSET ?2",
+            )?;
+            let rows = stmt.query_map(params![limit, offset], |row| {
+                Ok(ConversationSummary {
+                    id: row.get(0)?,
+                    run_id: row.get(1)?,
+                    created_at: row.get(2)?,
+                    utterance: row.get(3)?,
+                    is_vision: row.get::<_, i32>(4)? != 0,
+                })
+            })?;
+
+            let mut result = Vec::new();
+            for row in rows {
+                result.push(row?);
+            }
+            Ok(result)
+        })
+        .await?
+    }
+
+    /// Get a single conversation with all its messages
+    pub async fn get_conversation(
+        &self,
+        id: i64,
+    ) -> Result<Option<ConversationDetail>, Box<dyn std::error::Error + Send + Sync>> {
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock().map_err(|e| format!("lock: {e}"))?;
+
+            let summary: ConversationSummary = conn
+                .query_row(
+                    "SELECT id, run_id, created_at, utterance, is_vision
+                     FROM conversations WHERE id = ?1",
+                    params![id],
+                    |row| {
+                        Ok(ConversationSummary {
+                            id: row.get(0)?,
+                            run_id: row.get(1)?,
+                            created_at: row.get(2)?,
+                            utterance: row.get(3)?,
+                            is_vision: row.get::<_, i32>(4)? != 0,
+                        })
+                    },
+                )
+                .map_err(|e| format!("conversation not found: {e}"))?;
+
+            let mut stmt = conn.prepare(
+                "SELECT role, content, seq
+                 FROM conversation_messages
+                 WHERE conversation_id = ?1
+                 ORDER BY seq ASC",
+            )?;
+            let rows = stmt.query_map(params![id], |row| {
+                Ok(ConversationMessage {
+                    role: row.get(0)?,
+                    content: row.get(1)?,
+                    seq: row.get(2)?,
+                })
+            })?;
+
+            let messages: Vec<ConversationMessage> = rows.collect::<Result<_, _>>()?;
+
+            Ok(Some(ConversationDetail {
+                id: summary.id,
+                run_id: summary.run_id,
+                created_at: summary.created_at,
+                utterance: summary.utterance,
+                is_vision: summary.is_vision,
+                messages,
+            }))
+        })
+        .await?
     }
 }
 

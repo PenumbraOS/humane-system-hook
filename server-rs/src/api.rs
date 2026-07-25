@@ -9,12 +9,12 @@ mod dev;
 pub mod device;
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{Path, State};
-use axum::http::{StatusCode, header};
+use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, put};
 use axum::{Json, Router};
@@ -31,10 +31,10 @@ use crate::esim::{
     EsimSnapshot,
 };
 use crate::llm::memory::MemoryService;
-use crate::llm::{LlmAgent, LlmRequestLogger, validate_prompt_template};
+use crate::llm::{validate_prompt_template, LlmAgent, LlmRequestLogger};
 use crate::nearby::NearbyClient;
 use crate::services::aibus::{AiBus, AiBusHanders};
-use crate::storage::{MediaStore, MemoryRecord};
+use crate::storage::{ConversationDetail, ConversationSummary, MediaStore, MemoryRecord};
 use device::{DeviceApi, DeviceVersionSnapshot};
 
 const ESIM_GETTER_TIMEOUT: Duration = Duration::from_secs(20);
@@ -84,6 +84,22 @@ pub enum Event {
     Heartbeat,
 }
 
+// ─── Conversation types ─────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct PaginatedConversations {
+    conversations: Vec<ConversationSummary>,
+    has_more: bool,
+}
+
+#[derive(Deserialize)]
+struct ConversationsQuery {
+    #[serde(default)]
+    offset: Option<i64>,
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
 // ─── Router ─────────────────────────────────────────────────────────
 
 /// Build the `/api/*` router.
@@ -95,6 +111,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/memories/{uuid}", delete(delete_memory))
         .route("/api/memories/{uuid}/thumbnail/{index}", get(get_thumbnail))
         .route("/api/memories/{uuid}/files/{filename}", get(get_file))
+        .route("/api/conversations", get(list_conversations))
+        .route("/api/conversations/{id}", get(get_conversation))
         .nest("/api", contacts::router())
         .route("/api/device", get(DeviceApi::get_device))
         .route("/api/settings", get(get_settings))
@@ -178,6 +196,50 @@ async fn delete_memory(
         Ok(false) => Err(StatusCode::NOT_FOUND),
         Err(e) => {
             tracing::error!(uuid, error = %e, "failed to delete memory");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+// ─── Conversations ──────────────────────────────────────────────────
+
+const CONVERSATIONS_DEFAULT_LIMIT: i64 = 50;
+const CONVERSATIONS_MAX_LIMIT: i64 = 200;
+
+async fn list_conversations(
+    axum::extract::Query(query): axum::extract::Query<ConversationsQuery>,
+    State(state): State<ApiState>,
+) -> Json<PaginatedConversations> {
+    let offset = query.offset.unwrap_or(0).max(0);
+    let limit = query
+        .limit
+        .unwrap_or(CONVERSATIONS_DEFAULT_LIMIT)
+        .max(1)
+        .min(CONVERSATIONS_MAX_LIMIT);
+
+    let conversations = match state.db.list_conversations(offset, limit).await {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(error = %e, "failed to list conversations");
+            Vec::new()
+        }
+    };
+
+    Json(PaginatedConversations {
+        has_more: conversations.len() == limit as usize,
+        conversations,
+    })
+}
+
+async fn get_conversation(
+    Path(id): Path<i64>,
+    State(state): State<ApiState>,
+) -> Result<Json<ConversationDetail>, StatusCode> {
+    match state.db.get_conversation(id).await {
+        Ok(Some(detail)) => Ok(Json(detail)),
+        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            warn!(id, error = %e, "failed to get conversation");
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
