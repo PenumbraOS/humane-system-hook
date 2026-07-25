@@ -48,6 +48,34 @@ pub struct Location {
     pub full_address: Option<String>,
 }
 
+// ─── Conversations ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ConversationSummary {
+    pub id: i64,
+    pub run_id: String,
+    pub created_at: String,
+    pub utterance: String,
+    pub is_vision: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ConversationMessage {
+    pub role: String,
+    pub content: String,
+    pub seq: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ConversationDetail {
+    pub id: i64,
+    pub run_id: String,
+    pub created_at: String,
+    pub utterance: String,
+    pub is_vision: bool,
+    pub messages: Vec<ConversationMessage>,
+}
+
 // ─── MediaStore ─────────────────────────────────────────────────────
 
 pub struct MediaStore {
