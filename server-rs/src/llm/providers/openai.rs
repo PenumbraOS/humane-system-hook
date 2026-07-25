@@ -29,23 +29,25 @@ impl OpenAiProvider {
         let web_search_enabled =
             llm_config.provider == LlmProvider::OpenAi && llm_config.web_search;
 
+        let mut builder = providers::openai::CompletionsClient::builder()
+            .api_key(&api_key)
+            .http_client(http_client.clone());
+        if let Some(ref base_url) = llm_config.base_url {
+            builder = builder.base_url(base_url);
+        }
+        let client = builder.build()?;
+
+        info!(
+            "OpenAI agent ready (model={}, custom_base={}, web_search={})",
+            llm_config.model,
+            llm_config.base_url.is_some(),
+            web_search_enabled
+        );
+
         if web_search_enabled {
-            let mut builder = providers::openai::Client::builder()
-                .api_key(&api_key)
-                .http_client(http_client.clone());
-            if let Some(ref base_url) = llm_config.base_url {
-                builder = builder.base_url(base_url);
-            }
-            let client = builder.build()?;
-
-            info!(
-                "OpenAI agent ready (model={}, web_search=true)",
-                llm_config.model
-            );
-
             RigBackend::from_client(
                 "OpenAI",
-                client,
+                client.responses_api(),
                 request_logger,
                 config,
                 http_client,
@@ -58,19 +60,6 @@ impl OpenAiProvider {
             )
             .await
         } else {
-            let mut builder = providers::openai::CompletionsClient::builder()
-                .api_key(&api_key)
-                .http_client(http_client.clone());
-            if let Some(ref base_url) = llm_config.base_url {
-                builder = builder.base_url(base_url);
-            }
-            let client = builder.build()?;
-
-            info!(
-                "OpenAI agent ready (model={}, custom_base={})",
-                llm_config.model,
-                llm_config.base_url.is_some()
-            );
             RigBackend::from_client(
                 "OpenAI",
                 client,
