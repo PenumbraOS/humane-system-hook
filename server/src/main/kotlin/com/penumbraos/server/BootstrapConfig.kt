@@ -191,7 +191,6 @@ object BootstrapConfig {
         }
     }
 
-    /** Renames legacy `[llm].gemini_google_search` to `[llm].web_search`; never overwrites an existing `web_search`. */
     private fun migrateGeminiGoogleSearchKey(text: String): Pair<String, Boolean> {
         val lines = text.lines().toMutableList()
         val bounds = findSectionBounds(lines, "llm") ?: return text to false
