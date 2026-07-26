@@ -102,6 +102,8 @@ object BootstrapConfig {
 
     private data class SectionBounds(val headerIdx: Int, val endIdx: Int)
 
+    private data class SectionEntry(val lineIdx: Int, val key: String, val value: String)
+
     private fun managedFields(
         mediaDir: File,
         dbFile: File,
@@ -163,6 +165,13 @@ object BootstrapConfig {
             removedLegacyStatusPrompt = true
         }
 
+        val (textWithMigratedWebSearchKey, migratedWebSearchKey) =
+            migrateGeminiGoogleSearchKey(text)
+        if (migratedWebSearchKey) {
+            text = textWithMigratedWebSearchKey
+            changedAny = true
+        }
+
         if (!changedAny) return
 
         try {
@@ -174,11 +183,28 @@ object BootstrapConfig {
                 "Migrated ${configFile.absolutePath}: " +
                     "addedManagedDefaults=$addedManagedDefaults, " +
                     "removedLegacySystemPrompt=$removedLegacySystemPrompt, " +
-                    "removedLegacyStatusPrompt=$removedLegacyStatusPrompt",
+                    "removedLegacyStatusPrompt=$removedLegacyStatusPrompt, " +
+                    "migratedWebSearchKey=$migratedWebSearchKey",
             )
         } catch (t: Throwable) {
             Log.w(TAG, "Failed to persist migrated config", t)
         }
+    }
+
+    private fun migrateGeminiGoogleSearchKey(text: String): Pair<String, Boolean> {
+        val lines = text.lines().toMutableList()
+        val bounds = findSectionBounds(lines, "llm") ?: return text to false
+        val entries = scanSectionEntries(lines, bounds)
+
+        val legacy = entries.find { it.key == "gemini_google_search" } ?: return text to false
+        val webSearchPresent = entries.any { it.key == "web_search" }
+
+        lines.removeAt(legacy.lineIdx)
+        if (!webSearchPresent) {
+            lines.add(legacy.lineIdx, "web_search = ${legacy.value}")
+        }
+
+        return lines.joinToString("\n") to true
     }
 
     /**
@@ -205,14 +231,7 @@ object BootstrapConfig {
             return sb.toString() to true
         }
 
-        val presentKeys = mutableSetOf<String>()
-        for (i in bounds.headerIdx + 1 until bounds.endIdx) {
-            val t = lines[i].substringBefore('#').trim()
-            if (t.isEmpty()) continue
-            val eq = t.indexOf('=')
-            if (eq > 0) presentKeys += t.substring(0, eq).trim()
-        }
-
+        val presentKeys = scanSectionEntries(lines, bounds).map { it.key }.toSet()
         val missing = items.filterNot { it.key in presentKeys }
         if (missing.isEmpty()) return text to false
 
@@ -257,6 +276,19 @@ object BootstrapConfig {
         }
 
         return SectionBounds(headerIdx, endIdx)
+    }
+
+    /** Parses top-level `key = value` lines within a section, keeping each line's index for in-place edits. */
+    private fun scanSectionEntries(lines: List<String>, bounds: SectionBounds): List<SectionEntry> {
+        val entries = mutableListOf<SectionEntry>()
+        for (i in bounds.headerIdx + 1 until bounds.endIdx) {
+            val t = lines[i].substringBefore('#').trim()
+            if (t.isEmpty()) continue
+            val eq = t.indexOf('=')
+            if (eq <= 0) continue
+            entries += SectionEntry(i, t.substring(0, eq).trim(), t.substring(eq + 1).trim())
+        }
+        return entries
     }
 
     private fun escapeToml(value: String): String =

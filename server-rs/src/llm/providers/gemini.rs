@@ -29,7 +29,7 @@ impl GeminiProvider {
             .build()?;
 
         info!("Gemini agent ready (model={})", llm_config.model);
-        let gemini_google_search = llm_config.gemini_google_search;
+        let gemini_google_search = llm_config.web_search;
         let tools_enabled = llm_config.tools.enabled;
 
         RigBackend::from_client(
