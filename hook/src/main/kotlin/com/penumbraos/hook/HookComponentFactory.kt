@@ -43,6 +43,17 @@ class HookComponentFactory : AppComponentFactory() {
             "humane.experience.systemnavigation.SystemNavigationExperience" to SystemNavigationHooks::install,
             "humane.experience.settings.SettingsExperience" to SettingsHooks::install,
             "humane.connectivity.esimlpa.factoryService" to EsimLpaHooks::install,
+            // SPIKE step 1. Probe confirmed present in humane_music.apk dex (class
+            // humane.experience.music.MusicExperience, music-only package → unique
+            // to this process). NOTE: the music process's Application class is the
+            // SHARED humane.experience.ExperienceApplication, so do NOT probe on that.
+            // SELinux checked on-device: music runs in domain `ironman_experience`,
+            // the SAME domain as already-working targets systemnavigation and
+            // photography. That domain is in the `appdomain` attribute, which policy
+            // allows to read/map/execute apk_data_file (the label on our AliuHook
+            // .so files) — so the native-lib load is permitted. Injection expected
+            // to work; not yet run end-to-end on hardware.
+            "humane.experience.music.MusicExperience" to MusicHooks::install,
         )
     }
 

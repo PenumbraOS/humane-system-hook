@@ -7,5 +7,6 @@ pub mod partnerservices;
 pub mod privacy;
 pub mod provisioning;
 pub mod pushrelay;
+pub mod tidal_shim;
 pub mod user_info;
 pub mod wifi_config;
