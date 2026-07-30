@@ -48,6 +48,12 @@ pub fn router() -> Router {
         )
         .route("/tidal-shim/v1/playlists/{uuid}/items", get(playlist_items))
         .route(
+            "/tidal-shim/v1/tracks/{id}/recommendations",
+            get(track_recommendations),
+        )
+        // Trailing slash matches Method.SEARCH ("/search/top-hits/").
+        .route("/tidal-shim/v1/search/top-hits/", get(search_top_hits))
+        .route(
             "/tidal-shim/v1/tracks/{id}/playbackinfopostpaywall",
             get(playback_info),
         )
@@ -88,6 +94,42 @@ async fn playlist_items(Path(uuid): Path<String>) -> impl IntoResponse {
         "limit": 1,
         "offset": 0,
         "totalNumberOfItems": 1
+    }))
+}
+
+/// Track recommendations (played when a queue runs dry / "play more like this").
+///
+/// Body parses into `TrackRecommendations` directly; the query maps
+/// `getItems()` -> `item.getTrack()`. Element is `{track, sources}`.
+async fn track_recommendations(Path(id): Path<String>) -> impl IntoResponse {
+    info!(track_id = %id, ">>> tidal-shim tracks/{{id}}/recommendations");
+    Json(json!({
+        "items": [ { "track": track_json(TRACK_ID), "sources": ["SUGGESTED_TRACKS"] } ],
+        "limit": 1,
+        "offset": 0,
+        "totalNumberOfItems": 1
+    }))
+}
+
+/// Search ("play <song>"). Body parses into `SearchResult` directly. The
+/// track-name query reads `topHits()` (must be non-null) and
+/// `tracks().tracks()` (TrackSection.items via @SerializedName("items")), and
+/// plays the first result. Other sections are returned non-null/empty so search
+/// queries for other content types degrade to "not found" rather than NPE.
+async fn search_top_hits() -> impl IntoResponse {
+    info!(">>> tidal-shim search/top-hits");
+    let empty_section = json!({ "items": [], "limit": 0, "offset": 0, "totalNumberOfItems": 0 });
+    Json(json!({
+        "topHits": [],
+        "genres": [],
+        "tracks": {
+            "items": [ track_json(TRACK_ID) ],
+            "limit": 1, "offset": 0, "totalNumberOfItems": 1
+        },
+        "albums": empty_section.clone(),
+        "artists": empty_section.clone(),
+        "playlists": empty_section.clone(),
+        "videos": empty_section
     }))
 }
 
