@@ -3,6 +3,7 @@ pub mod fastembed;
 pub mod logcat;
 pub mod memory;
 pub mod nearby_search;
+pub mod play_music;
 pub mod registry;
 pub mod reverse_geocode;
 pub mod understand_scene;

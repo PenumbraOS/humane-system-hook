@@ -94,6 +94,10 @@ impl CompletionHandler {
                 warn!("EncryptedChatCompletion triggered vision tool (unexpected)");
                 "I can't capture an image in this context.".to_string()
             }
+            Ok(ChatResult::PlayMusic(_)) => {
+                warn!("EncryptedChatCompletion triggered play_music tool (unexpected)");
+                "I can't start music playback in this context.".to_string()
+            }
             Err(error) => {
                 warn!(error = %error, "EncryptedChatCompletion LLM failed");
                 error
@@ -157,6 +161,10 @@ impl CompletionHandler {
             .await
         {
             Ok(ChatResult::Text(text)) => text,
+            Ok(ChatResult::PlayMusic(_)) => {
+                warn!("EncryptedCompletion triggered play_music tool (unexpected)");
+                "I can't start music playback in this context.".to_string()
+            }
             Ok(ChatResult::DeferredVision) => {
                 warn!("EncryptedCompletion triggered vision tool (unexpected)");
                 "I can't capture an image in this context.".to_string()

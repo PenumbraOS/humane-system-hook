@@ -177,6 +177,17 @@ impl UnderstandHandler {
                 );
                 Ok(Box::pin(tokio_stream::once(Ok(response))))
             }
+            Ok(ChatResult::PlayMusic(args_json)) => {
+                let input = build_play_music_input(&args_json, utterance);
+                info!(input = %input, "<<< LLM requested music playback, returning PlayMusic");
+                let response = SynapseUnderstandingResponse::action_response(
+                    "PlayMusic",
+                    "The user wants to play music",
+                    &input,
+                    run_id,
+                );
+                Ok(Box::pin(tokio_stream::once(Ok(response))))
+            }
             Err(error) => {
                 warn!(error = %error, "LLM chat failed, falling back to error message");
                 self.spawn_save_conversation(run_id, utterance, does_have_image, history, &error);
@@ -371,4 +382,33 @@ fn non_empty_string(value: &str) -> Option<String> {
 
 fn format_coordinate(value: f64) -> String {
     format!("{value:.3}")
+}
+
+/// Map the `play_music` tool arguments (lowercase: track/artist/album/genre)
+/// onto the device `PlayMusicAction` input fields (`Track`/`Artist`/`Album`/
+/// `Genre`). If the model named nothing specific, fall back to `Query` with the
+/// raw utterance so the experience can still resolve it.
+fn build_play_music_input(args_json: &str, utterance: &str) -> String {
+    let parsed: serde_json::Value =
+        serde_json::from_str(args_json).unwrap_or_else(|_| serde_json::json!({}));
+    let mut input = serde_json::Map::new();
+
+    for (arg_key, field_name) in [
+        ("track", "Track"),
+        ("artist", "Artist"),
+        ("album", "Album"),
+        ("genre", "Genre"),
+    ] {
+        if let Some(value) = parsed.get(arg_key).and_then(|v| v.as_str()) {
+            if let Some(value) = non_empty_string(value) {
+                input.insert(field_name.to_string(), serde_json::json!(value));
+            }
+        }
+    }
+
+    if input.is_empty() {
+        input.insert("Query".to_string(), serde_json::json!(utterance));
+    }
+
+    serde_json::Value::Object(input).to_string()
 }

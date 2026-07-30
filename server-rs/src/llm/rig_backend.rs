@@ -23,11 +23,15 @@ use super::memory::MemoryService;
 use super::prompt::PromptBuilder;
 use super::request::LlmChatRequest;
 use super::request_log::LlmRequestLogger;
+use super::tools::play_music::PlayMusicTool;
 use super::tools::registry::LlmToolContext;
 use super::tools::understand_scene::UnderstandSceneTool;
 
 /// Marker for a termination due to device vision request
 const DEFERRED_VISION_SENTINEL: &str = "__HUMANE_DEFERRED_VISION__";
+/// Marker for a termination due to a music-play request. The captured tool
+/// arguments JSON is appended after this prefix.
+const PLAY_MUSIC_SENTINEL: &str = "__HUMANE_PLAY_MUSIC__";
 
 /// Rig hook to prevent execution of the `understand_scene` tool. The returned termination value
 /// is used to trigger a DeferredVision response to the client
@@ -43,19 +47,21 @@ where
         _prompt: &Message,
         response: &CompletionResponse<M::Response>,
     ) -> HookAction {
-        let selected_vision = response.choice.iter().any(|content| {
-            matches!(
-                content,
-                AssistantContent::ToolCall(call)
-                    if call.function.name == UnderstandSceneTool::NAME
-            )
-        });
-
-        if selected_vision {
-            HookAction::terminate(DEFERRED_VISION_SENTINEL)
-        } else {
-            HookAction::cont()
+        // Intercept the no-op device tools before rig tries to execute them,
+        // terminating the agent loop so the Understand handler can emit the
+        // corresponding device action. play_music also carries its args JSON.
+        for content in response.choice.iter() {
+            if let AssistantContent::ToolCall(call) = content {
+                if call.function.name == UnderstandSceneTool::NAME {
+                    return HookAction::terminate(DEFERRED_VISION_SENTINEL.to_string());
+                }
+                if call.function.name == PlayMusicTool::NAME {
+                    let args = call.function.arguments.to_string();
+                    return HookAction::terminate(format!("{PLAY_MUSIC_SENTINEL}{args}"));
+                }
+            }
         }
+        HookAction::cont()
     }
 }
 
@@ -165,6 +171,13 @@ where
                 {
                     Ok(ChatResult::DeferredVision)
                 }
+                Err(PromptError::PromptCancelled { reason, .. })
+                    if reason.starts_with(PLAY_MUSIC_SENTINEL) =>
+                {
+                    Ok(ChatResult::PlayMusic(
+                        reason[PLAY_MUSIC_SENTINEL.len()..].to_string(),
+                    ))
+                }
                 Err(e) => {
                     error!(provider = self.provider_label, error = %e, "LLM chat failed");
                     Err(friendly_error_message(&e))
@@ -180,6 +193,7 @@ where
                     match &result {
                         Ok(ChatResult::Text(text)) => Some(text.as_str()),
                         Ok(ChatResult::DeferredVision) => None,
+                        Ok(ChatResult::PlayMusic(_)) => None,
                         Err(_) => None,
                     },
                     result.clone().err().as_deref(),

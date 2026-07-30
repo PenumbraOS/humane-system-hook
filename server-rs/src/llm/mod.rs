@@ -20,4 +20,8 @@ pub enum ChatResult {
     Text(String),
     /// The `understand_scene` tool was invoked; the server awaits a follow up request containing a new camera image
     DeferredVision,
+    /// The `play_music` tool was invoked. Carries the device `PlayMusic` action
+    /// input JSON (device field names: `Track`, `Artist`, `Album`, `Genre`,
+    /// `Query`). The client routes this to the music experience.
+    PlayMusic(String),
 }
