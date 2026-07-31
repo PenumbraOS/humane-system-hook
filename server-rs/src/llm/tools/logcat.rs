@@ -7,6 +7,8 @@ use serde_json::json;
 use std::path::Path;
 use tokio::process::Command;
 
+use crate::util::truncate_on_char_boundary;
+
 /// Tool that captures the full Android logcat buffer and writes it to
 /// `/sdcard/PenumbraOS/logcat/logcat_<timestamp>[_<annotation>].txt`.
 #[derive(Debug, Clone)]
@@ -163,14 +165,10 @@ fn sanitize_annotation(annotation: &str) -> String {
     }
 
     // Trim trailing underscores
-    let result = result.trim_end_matches('_').to_string();
+    let mut result = result.trim_end_matches('_').to_string();
 
-    // Cap at 30 characters. `result[..30]` is a *byte* slice and panics when a
-    // multi-byte character straddles byte 30 — and the filter above keeps any
-    // `char::is_alphanumeric()` char, which includes non-ASCII letters. Slice on
-    // a char boundary instead.
-    match result.char_indices().nth(30) {
-        Some((boundary, _)) => result[..boundary].to_string(),
-        None => result,
-    }
+    // The filter above keeps any `char::is_alphanumeric()` char, including
+    // non-ASCII letters, so a plain `result[..30]` byte slice can split one.
+    truncate_on_char_boundary(&mut result, 30);
+    result
 }
