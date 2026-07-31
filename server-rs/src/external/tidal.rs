@@ -11,7 +11,8 @@
 //!
 //! Auth is Tidal's OAuth **device-authorization** flow (show the user a code +
 //! `link.tidal.com`), then a refresh token we persist. `client_id`/`_secret`
-//! are the reverse-engineered Tidal app credentials the user supplies.
+//! are limited-input-device (TV) OAuth credentials the user supplies; none is
+//! shipped here (see `TidalConfig`).
 
 use std::time::{Duration, Instant};
 

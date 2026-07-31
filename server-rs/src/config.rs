@@ -284,7 +284,7 @@ fn default_spotify_market() -> String {
 /// token and the device plays Tidal audio natively — no embedded player. Uses
 /// the device-authorization OAuth flow, which requires a *limited-input-device*
 /// (TV/streamer) `client_id`/`client_secret` — Tidal issues these only to its
-/// own apps, so users supply a reverse-engineered pair (not shipped here);
+/// own apps, so users must supply their own pair (none is shipped here);
 /// secrets live in config.local.toml. Playback needs a Tidal HiFi subscription.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TidalConfig {
