@@ -167,8 +167,6 @@ fn sanitize_annotation(annotation: &str) -> String {
     // Trim trailing underscores
     let mut result = result.trim_end_matches('_').to_string();
 
-    // The filter above keeps any `char::is_alphanumeric()` char, including
-    // non-ASCII letters, so a plain `result[..30]` byte slice can split one.
     truncate_on_char_boundary(&mut result, 30);
     result
 }
