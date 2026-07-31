@@ -8,10 +8,18 @@
 
     <application
         android:allowBackup="false"
-        android:label="PenumbraHook">
-        <!-- No activities, no receivers, no services.
+        android:label="PenumbraHook"
+        tools:replace="android:allowBackup">
+        <!-- No activities, no receivers, no services of our own.
              This APK exists only to be loaded into other processes
              via sharedLibraryFiles. -->
+
+        <!-- The MusicKit auth AAR ships an OAuth redirect Activity we don't use
+             (we supply tokens directly via TokenProvider). Drop it so its missing
+             android:exported doesn't fail the manifest merge. -->
+        <activity
+            android:name="com.apple.android.sdk.authentication.SDKUriHandlerActivity"
+            tools:node="remove" />
 
         <!-- Authoritative list of packages the injector should target at boot.
              Comma-separated Android package names. -->

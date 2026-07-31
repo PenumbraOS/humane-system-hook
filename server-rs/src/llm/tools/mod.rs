@@ -1,3 +1,4 @@
+pub mod control_music;
 pub mod fastembed;
 #[cfg(target_os = "android")]
 pub mod logcat;

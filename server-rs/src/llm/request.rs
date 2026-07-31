@@ -23,6 +23,9 @@ pub struct PromptTemplateContext {
     pub latitude: Option<String>,
     pub longitude: Option<String>,
     pub coordinates: Option<String>,
+
+    /// "Title — Artist" of the track currently playing, if any.
+    pub now_playing: Option<String>,
 }
 
 impl PromptTemplateContext {
@@ -48,6 +51,7 @@ impl PromptTemplateContext {
             latitude: None,
             longitude: None,
             coordinates: None,
+            now_playing: None,
         }
     }
 }

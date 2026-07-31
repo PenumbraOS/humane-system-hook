@@ -24,4 +24,8 @@ pub enum ChatResult {
     /// input JSON (device field names: `Track`, `Artist`, `Album`, `Genre`,
     /// `Query`). The client routes this to the music experience.
     PlayMusic(String),
+    /// The `control_music` tool was invoked. Carries the Humane device transport
+    /// action name (`PauseMusic`, `ResumeMusic`, `NextTrack`, `PreviousTrack`,
+    /// `RestartTrack`) to route to the music experience.
+    MusicControl(String),
 }

@@ -8,6 +8,11 @@ description = "Standalone gRPC server for Humane AI Pin"
 name = "humane-server"
 path = "src/main.rs"
 
+[features]
+# Spotify audio streaming via librespot. Off by default (validating the Android
+# cross-compile). Build with `--features spotify-playback` to enable.
+spotify-playback = ["dep:librespot-core", "dep:librespot-audio", "dep:librespot-metadata"]
+
 [dependencies]
 tonic = "0.14"
 tonic-prost = "0.14"
@@ -32,6 +37,17 @@ futures = "0.3"
 base64 = "0.22"
 rcgen = "0.14"
 aes-gcm = "0.10"
+# Pure-Rust P-256 ECDSA for minting Apple MusicKit developer tokens (ES256 JWT)
+# from a user's .p8 — cross-compiles to aarch64-android with no C toolchain.
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
+# Lock-free hot-swap of the active music provider (no restart on config change)
+arc-swap = "1"
+# librespot (Spotify streaming) — behind the `spotify-playback` feature so the
+# default build isn't affected while we validate the Android cross-compile.
+# Sub-crates only (no librespot-playback → no C audio backends).
+librespot-core = { version = "0.6", optional = true, default-features = false }
+librespot-audio = { version = "0.6", optional = true, default-features = false }
+librespot-metadata = { version = "0.6", optional = true, default-features = false }
 rand = "0.10"
 tower-http = { version = "0.6", features = ["trace", "cors"] }
 mime_guess = "2"
@@ -61,6 +77,7 @@ hex = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
+rand_core = { version = "0.6", features = ["getrandom"] }
 
 [patch.crates-io]
 memvid-core = { git = "https://github.com/agg23/memvid", branch = "no-lock" }

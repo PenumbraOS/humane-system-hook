@@ -23,6 +23,7 @@ use super::memory::MemoryService;
 use super::prompt::PromptBuilder;
 use super::request::LlmChatRequest;
 use super::request_log::LlmRequestLogger;
+use super::tools::control_music::ControlMusicTool;
 use super::tools::play_music::PlayMusicTool;
 use super::tools::registry::LlmToolContext;
 use super::tools::understand_scene::UnderstandSceneTool;
@@ -32,6 +33,25 @@ const DEFERRED_VISION_SENTINEL: &str = "__HUMANE_DEFERRED_VISION__";
 /// Marker for a termination due to a music-play request. The captured tool
 /// arguments JSON is appended after this prefix.
 const PLAY_MUSIC_SENTINEL: &str = "__HUMANE_PLAY_MUSIC__";
+
+const MUSIC_CONTROL_SENTINEL: &str = "__HUMANE_MUSIC_CONTROL__";
+
+/// Map the `control_music` tool's semantic `action` to the Humane device
+/// transport action name. Returns `None` for an unrecognized action so the
+/// agent falls back to a normal response.
+fn music_control_action(args: &serde_json::Value) -> Option<&'static str> {
+    match args.get("action").and_then(|a| a.as_str())?.trim() {
+        "pause" | "stop" => Some("PauseMusic"),
+        "resume" | "play" | "continue" => Some("ResumeMusic"),
+        "next" | "skip" => Some("NextTrack"),
+        "previous" | "back" | "prev" => Some("PreviousTrack"),
+        "restart" => Some("RestartTrack"),
+        "favorite" | "like" => Some("SaveCurrentTrackToFavorites"),
+        "play_favorites" | "favorites" => Some("PlayFavoriteTracks"),
+        "radio" | "station" => Some("PlayCurrentTrackRadio"),
+        _ => None,
+    }
+}
 
 /// Rig hook to prevent execution of the `understand_scene` tool. The returned termination value
 /// is used to trigger a DeferredVision response to the client
@@ -58,6 +78,11 @@ where
                 if call.function.name == PlayMusicTool::NAME {
                     let args = call.function.arguments.to_string();
                     return HookAction::terminate(format!("{PLAY_MUSIC_SENTINEL}{args}"));
+                }
+                if call.function.name == ControlMusicTool::NAME {
+                    if let Some(action) = music_control_action(&call.function.arguments) {
+                        return HookAction::terminate(format!("{MUSIC_CONTROL_SENTINEL}{action}"));
+                    }
                 }
             }
         }
@@ -97,7 +122,12 @@ where
         F: FnOnce(AgentBuilder<M>) -> AgentBuilder<M>,
     {
         let llm_config = &config.config.llm;
-        let builder = customize_builder(client.agent(&llm_config.model));
+        // Anthropic requires max_tokens on every request; harmless for others.
+        let builder = customize_builder(
+            client
+                .agent(&llm_config.model)
+                .max_tokens(llm_config.max_tokens),
+        );
 
         let tool_resources = if llm_config.tools.enabled {
             let tool_context = LlmToolContext::new(http_client, config, memory);
@@ -178,6 +208,13 @@ where
                         reason[PLAY_MUSIC_SENTINEL.len()..].to_string(),
                     ))
                 }
+                Err(PromptError::PromptCancelled { reason, .. })
+                    if reason.starts_with(MUSIC_CONTROL_SENTINEL) =>
+                {
+                    Ok(ChatResult::MusicControl(
+                        reason[MUSIC_CONTROL_SENTINEL.len()..].to_string(),
+                    ))
+                }
                 Err(e) => {
                     error!(provider = self.provider_label, error = %e, "LLM chat failed");
                     Err(friendly_error_message(&e))
@@ -194,6 +231,7 @@ where
                         Ok(ChatResult::Text(text)) => Some(text.as_str()),
                         Ok(ChatResult::DeferredVision) => None,
                         Ok(ChatResult::PlayMusic(_)) => None,
+                        Ok(ChatResult::MusicControl(_)) => None,
                         Err(_) => None,
                     },
                     result.clone().err().as_deref(),

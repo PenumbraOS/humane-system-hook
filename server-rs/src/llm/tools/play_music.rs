@@ -27,17 +27,43 @@ impl Tool for PlayMusicTool {
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: "Play music on the device. Use whenever the user asks to play, put on, \
-                or start a song, artist, album, genre, or playlist (e.g. 'play Bohemian Rhapsody', \
-                'play some Queen', 'play jazz', 'put on my workout playlist'). Fill only the fields \
-                the user specified; leave the rest empty. Do NOT use this for general questions."
+                or start music (e.g. 'play Bohemian Rhapsody', 'play some Queen', 'play jazz', \
+                'play something chill', 'put on Afro House', 'play my workout playlist', 'play \
+                Kanye's new album'). Fill only the fields the user specified; leave the rest \
+                empty. Resolve STRICTLY from the user's latest/most-recent message — never reuse \
+                a song, artist, album, or mood mentioned earlier in the conversation; each play \
+                request is independent. Do NOT use this for general questions or to control \
+                already-playing music (use control_music for pause/skip/etc). In particular, \
+                'more like this', 'play more like this', 'play something similar', 'keep this vibe \
+                going', 'start a radio', 'skip'/'next', and 'previous' are NOT play_music requests \
+                — they operate on the current track, so use control_music. Only use play_music \
+                when the user names new music (a specific song, artist, album, genre, or mood)."
                 .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "track": { "type": "string", "description": "Song / track title, if named." },
+                    "track": { "type": "string", "description": "A specific song / track title, if named." },
                     "artist": { "type": "string", "description": "Artist / band name, if named." },
-                    "album": { "type": "string", "description": "Album name, if named." },
-                    "genre": { "type": "string", "description": "Genre or mood, if named." }
+                    "album": { "type": "string", "description": "A specific album name, if named." },
+                    "mood": {
+                        "type": "string",
+                        "description": "A genre, mood, activity, era, or vibe rather than a specific \
+                            song/artist/album — e.g. 'afro house', 'rap', 'jazz', 'chill', \
+                            'workout', 'sad songs', '80s'. Plays a matching playlist."
+                    },
+                    "playlist": {
+                        "type": "string",
+                        "description": "One of the USER'S OWN saved/library playlists, when they say \
+                            'my ...' — e.g. 'play my workout playlist' -> 'workout', 'play my \
+                            Discovery playlist' -> 'Discovery'. Use 'my playlists' (verbatim) when \
+                            they just say 'play my playlists' with no specific name. Prefer this \
+                            over `mood` whenever the user says 'my'."
+                    },
+                    "latest_album": {
+                        "type": "boolean",
+                        "description": "True when the user wants the named artist's NEWEST/latest \
+                            album (set `artist` too), e.g. 'play Kanye's new album'."
+                    }
                 },
                 "required": []
             }),

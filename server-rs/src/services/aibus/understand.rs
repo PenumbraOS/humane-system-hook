@@ -16,6 +16,7 @@ use crate::db::Database;
 use crate::llm::ChatResult;
 use crate::llm::memory::MemoryService;
 use crate::llm::{LlmAgent, LlmChatRequest, PromptTemplateContext, PromptTemplates};
+use crate::music::{MusicProvider, NowPlayingHandle};
 use crate::proto::aibus::*;
 use crate::proto::common::encryption::{self, EncryptedData};
 use crate::synapse::conversation::extract_history;
@@ -29,15 +30,20 @@ pub struct UnderstandHandler {
     db: Database,
     memory: Option<MemoryService>,
     image_store: LiveImageStore,
+    music_provider: Arc<MusicProvider>,
+    now_playing: NowPlayingHandle,
 }
 
 impl UnderstandHandler {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         agent: Arc<LlmAgent>,
         config: Arc<ResolvedConfig>,
         db: Database,
         memory: Option<MemoryService>,
         image_store: LiveImageStore,
+        music_provider: Arc<MusicProvider>,
+        now_playing: NowPlayingHandle,
     ) -> Self {
         Self {
             agent,
@@ -45,10 +51,12 @@ impl UnderstandHandler {
             db,
             memory,
             image_store,
+            music_provider,
+            now_playing,
         }
     }
 
-    fn build_prompt_template_context(
+    async fn build_prompt_template_context(
         &self,
         req: &SynapseUnderstandingRequest,
         run_id: &str,
@@ -69,6 +77,9 @@ impl UnderstandHandler {
             context.longitude = Some(longitude.clone());
             context.coordinates = Some(format!("{latitude}, {longitude}"));
         }
+
+        // Current song, so the assistant can answer "what's playing" etc.
+        context.now_playing = self.now_playing.read().await.as_ref().map(|np| np.summary());
 
         context
     }
@@ -124,7 +135,9 @@ impl UnderstandHandler {
             status_prompt: self.config.config.server.resolved_status_prompt(),
         };
 
-        let template_context = self.build_prompt_template_context(req, run_id, &self.config);
+        let template_context = self
+            .build_prompt_template_context(req, run_id, &self.config)
+            .await;
         let memory_context = if let Some(memory) = &self.memory {
             match memory.retrieve_context(utterance.to_string()).await {
                 Ok(context) => context,
@@ -178,12 +191,60 @@ impl UnderstandHandler {
                 Ok(Box::pin(tokio_stream::once(Ok(response))))
             }
             Ok(ChatResult::PlayMusic(args_json)) => {
-                let input = build_play_music_input(&args_json, utterance);
+                let input =
+                    build_play_music_input(&self.music_provider, &args_json, utterance).await;
+                // If a specifically-named song resolves to an Apple-unplayable
+                // (>2^31 id) track, speak an alert instead of silently stalling.
+                if let Some(message) =
+                    apple_unplayable_message(&self.music_provider, &input).await
+                {
+                    info!(message = %message, "<<< specific song unplayable on Apple, alerting");
+                    let mut response = SynapseUnderstandingResponse::action_response(
+                        "Respond",
+                        "The requested song can't play on the current provider",
+                        &serde_json::json!({ "Response": message }).to_string(),
+                        run_id,
+                    );
+                    // Populate the top-level spoken response + finalize so the Pin
+                    // reads the alert aloud, not just displays it.
+                    response.response = message.clone();
+                    response.is_final = true;
+                    return Ok(Box::pin(tokio_stream::once(Ok(response))));
+                }
                 info!(input = %input, "<<< LLM requested music playback, returning PlayMusic");
                 let response = SynapseUnderstandingResponse::action_response(
                     "PlayMusic",
                     "The user wants to play music",
                     &input,
+                    run_id,
+                );
+                Ok(Box::pin(tokio_stream::once(Ok(response))))
+            }
+            Ok(ChatResult::MusicControl(action)) => {
+                // The device's `PlayFavoriteTracks` action needs a logged-in
+                // Tidal user session we bypass, so it silently no-ops. Route it
+                // through PlayMusic with a sentinel term instead, which the shim
+                // resolves to the user's real library (a playable queue).
+                if action == "PlayFavoriteTracks" {
+                    let input = serde_json::json!({
+                        "Track": crate::services::tidal_shim::FAVORITES_TERM
+                    })
+                    .to_string();
+                    info!("<<< play favorites -> PlayMusic(library queue)");
+                    let response = SynapseUnderstandingResponse::action_response(
+                        "PlayMusic",
+                        "The user wants to play their favorite songs",
+                        &input,
+                        run_id,
+                    );
+                    return Ok(Box::pin(tokio_stream::once(Ok(response))));
+                }
+                info!(action = %action, "<<< LLM requested music transport control");
+                // These device transport actions take no input fields.
+                let response = SynapseUnderstandingResponse::action_response(
+                    &action,
+                    "The user wants to control music playback",
+                    "{}",
                     run_id,
                 );
                 Ok(Box::pin(tokio_stream::once(Ok(response))))
@@ -384,23 +445,106 @@ fn format_coordinate(value: f64) -> String {
     format!("{value:.3}")
 }
 
-/// Map the `play_music` tool arguments (lowercase: track/artist/album/genre)
-/// onto the device `PlayMusicAction` input fields (`Track`/`Artist`/`Album`/
-/// `Genre`). If the model named nothing specific, fall back to `Query` with the
-/// raw utterance so the experience can still resolve it.
-fn build_play_music_input(args_json: &str, utterance: &str) -> String {
+/// When a specifically-named song (the `Track` field) resolves to an
+/// Apple-unplayable track (id >= 2^31 — the 2021 SDK's 32-bit overflow), return a
+/// spoken alert. Only checks the single-song case to keep latency low; queues get
+/// the unplayable tracks filtered out in the shim instead.
+async fn apple_unplayable_message(provider: &MusicProvider, input_json: &str) -> Option<String> {
+    if !matches!(provider, MusicProvider::Apple(_)) {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(input_json).ok()?;
+    let track = value.get("Track")?.as_str()?;
+    // The device searches the combined "Track Artist" phrase, so match that here
+    // or the resolved id (and thus the playable check) won't line up.
+    let phrase = match value.get("Artist").and_then(|a| a.as_str()) {
+        Some(artist) if !artist.is_empty() => format!("{track} {artist}"),
+        _ => track.to_string(),
+    };
+    let top = provider.search_top(&phrase).await.ok()??;
+    if crate::music::apple_id_playable(&top.id) {
+        return None;
+    }
+    Some(format!(
+        "Sorry — \"{}\" is a recent release that can't play on Apple Music right now due to a known \
+         limitation with newer songs. You can switch to Spotify or YouTube in settings to play it.",
+        top.title
+    ))
+}
+
+/// Map the `play_music` tool arguments onto the device `PlayMusicAction` input
+/// fields, doing the resolution the device can't:
+/// - `mood` (genre/vibe/activity) -> `Playlist` so the device runs a playlist
+///   search the shim answers with a matching Apple playlist (the device's own
+///   genre resolver only knows ~8 genres and often fails).
+/// - `latest_album` -> resolve the artist's newest album name server-side and
+///   hand the device that concrete album.
+/// - track/artist/album pass through to their resolver paths.
+async fn build_play_music_input(
+    provider: &MusicProvider,
+    args_json: &str,
+    utterance: &str,
+) -> String {
     let parsed: serde_json::Value =
         serde_json::from_str(args_json).unwrap_or_else(|_| serde_json::json!({}));
+    let field = |key: &str| {
+        parsed
+            .get(key)
+            .and_then(|v| v.as_str())
+            .and_then(non_empty_string)
+    };
     let mut input = serde_json::Map::new();
 
-    for (arg_key, field_name) in [
-        ("track", "Track"),
-        ("artist", "Artist"),
-        ("album", "Album"),
-        ("genre", "Genre"),
-    ] {
-        if let Some(value) = parsed.get(arg_key).and_then(|v| v.as_str()) {
-            if let Some(value) = non_empty_string(value) {
+    let artist = field("artist");
+    let wants_latest = parsed
+        .get("latest_album")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    // Artist's newest album: resolve the concrete album title now.
+    if wants_latest {
+        if let Some(ref artist) = artist {
+            if let Ok(Some(album)) = provider.latest_album(artist).await {
+                info!(artist = %artist, album = %album, "resolved latest album");
+                input.insert("Album".to_string(), serde_json::json!(album));
+                input.insert("Artist".to_string(), serde_json::json!(artist));
+            }
+        }
+    }
+
+    // The user's OWN saved/library playlist -> a personal-library sentinel the
+    // shim resolves against the signed-in account (the device's library-playlist
+    // action needs a Tidal user id we don't have, so it no-ops). "my playlists"
+    // (no specific name) plays a shuffled mix across them.
+    if input.is_empty() {
+        if let Some(playlist) = field("playlist") {
+            let p = playlist.to_lowercase();
+            let term = if matches!(
+                p.as_str(),
+                "my playlists" | "all" | "my library" | "everything" | "my playlist"
+            ) {
+                crate::services::tidal_shim::MY_PLAYLISTS_TERM.to_string()
+            } else {
+                format!("{}{}", crate::services::tidal_shim::PLAYLIST_PREFIX, playlist)
+            };
+            input.insert("Track".to_string(), serde_json::json!(term));
+        }
+    }
+
+    // Mood/genre/vibe -> the device's Album path with a `playlist:` marker. The
+    // shim resolves that to a matching Apple playlist and serves its tracks. (The
+    // device's own Genre path only knows ~8 genres, and its Playlist path needs a
+    // Tidal user id we don't have — both fail before reaching the shim.)
+    if input.is_empty() {
+        if let Some(mood) = field("mood") {
+            input.insert("Album".to_string(), serde_json::json!(format!("playlist:{mood}")));
+        }
+    }
+
+    // Specific track/artist/album pass through to their resolver paths.
+    if input.is_empty() {
+        for (arg_key, field_name) in [("track", "Track"), ("artist", "Artist"), ("album", "Album")] {
+            if let Some(value) = field(arg_key) {
                 input.insert(field_name.to_string(), serde_json::json!(value));
             }
         }

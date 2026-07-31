@@ -17,6 +17,7 @@ use crate::config::ResolvedConfig;
 use crate::db::Database;
 use crate::llm::memory::MemoryService;
 use crate::llm::LlmAgent;
+use crate::music::{MusicProvider, NowPlayingHandle};
 use crate::nearby::NearbyClient;
 use crate::proto::aibus::ai_bus_service_server::AiBusService;
 use crate::proto::aibus::*;
@@ -38,6 +39,7 @@ pub struct AiBus {
 }
 
 impl AiBus {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         agent: Arc<LlmAgent>,
         config: Arc<ResolvedConfig>,
@@ -45,6 +47,8 @@ impl AiBus {
         http_client: reqwest::Client,
         db: Database,
         memory: Option<MemoryService>,
+        music_provider: Arc<MusicProvider>,
+        now_playing: NowPlayingHandle,
     ) -> Self {
         Self {
             handlers: Arc::new(RwLock::new(Arc::new(AiBusHanders::new(
@@ -54,6 +58,8 @@ impl AiBus {
                 http_client,
                 db,
                 memory,
+                music_provider,
+                now_playing,
             )))),
         }
     }
@@ -351,6 +357,7 @@ pub struct AiBusHanders {
 }
 
 impl AiBusHanders {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         agent: Arc<LlmAgent>,
         config: Arc<ResolvedConfig>,
@@ -358,6 +365,8 @@ impl AiBusHanders {
         http_client: reqwest::Client,
         db: Database,
         memory: Option<MemoryService>,
+        music_provider: Arc<MusicProvider>,
+        now_playing: NowPlayingHandle,
     ) -> Self {
         let live_image_store = LiveImageStore::new();
 
@@ -368,6 +377,8 @@ impl AiBusHanders {
                 db.clone(),
                 memory.clone(),
                 live_image_store.clone(),
+                music_provider,
+                now_playing,
             ),
             vision: VisionHandler::new(live_image_store),
             weather: WeatherHandler::new(

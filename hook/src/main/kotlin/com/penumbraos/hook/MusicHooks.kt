@@ -25,6 +25,8 @@ object MusicHooks {
 
         EndpointTypeBypass.install(cl)
 
+        MusicKitEngine.install(cl)
+
         Log.w(TAG, "=== MUSIC HOOKS INSTALLED ===")
     }
 }

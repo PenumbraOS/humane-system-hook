@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn};
 
-use crate::config::{Config, LlmProvider, ResolvedConfig, ServerConfig};
+use crate::config::{Config, LlmProvider, MusicProviderKind, ResolvedConfig, ServerConfig};
 use crate::db::Database;
 use crate::dedup::DedupHandle;
 use crate::esim::{
@@ -33,6 +33,7 @@ use crate::esim::{
 use crate::llm::memory::MemoryService;
 use crate::llm::{validate_prompt_template, LlmAgent, LlmRequestLogger};
 use crate::nearby::NearbyClient;
+use crate::music::NowPlayingHandle;
 use crate::services::aibus::{AiBus, AiBusHanders};
 use crate::storage::{ConversationDetail, ConversationSummary, MediaStore, MemoryRecord};
 use device::{DeviceApi, DeviceVersionSnapshot};
@@ -71,6 +72,11 @@ pub struct ApiState {
     pub contact_client_reset_pending: Arc<AtomicBool>,
     /// Current device software and OS versions.
     pub device_versions: DeviceVersionSnapshot,
+    /// Music provider (hot-swappable) + now-playing state, re-supplied to the
+    /// AiBus on hot-reload. Stored fresh on a music-settings change so provider/
+    /// credential switches apply without a server restart.
+    pub music_provider: crate::music::SharedProvider,
+    pub now_playing: NowPlayingHandle,
 }
 
 // ─── Event types for the streaming endpoint ─────────────────────────
@@ -117,6 +123,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/device", get(DeviceApi::get_device))
         .route("/api/settings", get(get_settings))
         .route("/api/settings", put(update_settings))
+        .route("/api/music/apple/musickit-config", get(get_musickit_config))
+        .route("/api/music/spotify/exchange", put(exchange_spotify_code))
         .route("/api/events", get(event_stream))
         .route(
             "/api/cellular/service-status",
@@ -297,6 +305,41 @@ struct SettingsResponse {
     weather: WeatherSettingsResponse,
     contacts: ContactsSettingsResponse,
     dev: DevSettingsResponse,
+    music: MusicSettingsResponse,
+}
+
+/// Payload for `GET /api/music/apple/musickit-config` — what Center needs to
+/// initialize MusicKit JS. `developer_token` is `None` until one is configured.
+#[derive(Serialize)]
+struct MusicKitConfigResponse {
+    developer_token: Option<String>,
+    storefront: String,
+}
+
+/// Music provider + configured-status flags (secrets never sent back — only
+/// whether each provider has the credentials it needs).
+#[derive(Serialize)]
+struct MusicSettingsResponse {
+    provider: MusicProviderKind,
+    /// A usable developer token is available (minted from `.p8` or pasted).
+    apple_configured: bool,
+    /// The `.p8` + Key ID + Team ID are all present (server self-mints tokens).
+    apple_key_configured: bool,
+    /// A Music User Token is stored (personalized library/mixes/favorites work).
+    apple_user_configured: bool,
+    apple_storefront: String,
+    spotify_configured: bool,
+    /// Spotify Premium creds present (needed for librespot playback).
+    spotify_playback_ready: bool,
+    /// A Spotify user is signed in via OAuth (real library/favorites available).
+    spotify_user_configured: bool,
+    /// Public Spotify Client ID (not a secret) — Center needs it to build the
+    /// OAuth authorize URL. `None` until configured.
+    spotify_client_id: Option<String>,
+    spotify_market: String,
+    /// Mopidy server + Icecast stream URLs (not secrets).
+    mopidy_url: Option<String>,
+    mopidy_stream_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -361,6 +404,85 @@ struct DevSettingsResponse {
     apk_install_enabled: bool,
 }
 
+/// MusicKit-JS configuration for Center's "Sign in with Apple Music" flow: the
+/// developer token (the app-identity JWT Center needs to `MusicKit.configure`)
+/// and storefront. The user token is never returned — it is captured by Center
+/// and written back via `PUT /api/settings`.
+async fn get_musickit_config(State(state): State<ApiState>) -> Json<MusicKitConfigResponse> {
+    let config = state.shared_config.read().await;
+    Json(MusicKitConfigResponse {
+        developer_token: config.apple_music.effective_developer_token(),
+        storefront: config.apple_music.storefront.clone(),
+    })
+}
+
+/// Body for `PUT /api/music/spotify/exchange`: the OAuth (PKCE) authorization
+/// code captured by Center, plus the verifier and redirect URI used, so the Pin
+/// completes the token exchange itself and stores the refresh token.
+#[derive(Deserialize)]
+struct SpotifyExchangeRequest {
+    code: String,
+    code_verifier: String,
+    redirect_uri: String,
+}
+
+/// Complete the Spotify OAuth (PKCE) sign-in: exchange the code for a refresh
+/// token on-device and persist it. The tokens never transit a shared server —
+/// only Center (browser) → this Pin.
+async fn exchange_spotify_code(
+    State(state): State<ApiState>,
+    Json(body): Json<SpotifyExchangeRequest>,
+) -> Response {
+    let (http, client_id, config_path) = {
+        let config = state.shared_config.read().await;
+        let Some(client_id) = config
+            .spotify
+            .client_id
+            .as_ref()
+            .filter(|s| !s.trim().is_empty())
+            .cloned()
+        else {
+            return (
+                StatusCode::BAD_REQUEST,
+                "set the Spotify Client ID first".to_string(),
+            )
+                .into_response();
+        };
+        (state.http_client.clone(), client_id, state.config_path.clone())
+    };
+
+    let refresh_token = match crate::external::spotify::exchange_code(
+        &http,
+        &client_id,
+        &body.code,
+        &body.code_verifier,
+        &body.redirect_uri,
+    )
+    .await
+    {
+        Ok(t) => t,
+        Err(e) => {
+            warn!(error = %e, "spotify code exchange failed");
+            return (StatusCode::BAD_GATEWAY, format!("Spotify sign-in failed: {e}"))
+                .into_response();
+        }
+    };
+
+    {
+        let mut config = state.shared_config.write().await;
+        config.spotify.refresh_token = Some(refresh_token);
+        if let Err(e) = persist_music_local(&config_path, &config) {
+            warn!(error = %e, "failed to persist spotify refresh token");
+        }
+        // Hot-swap so the new library access applies without a restart.
+        state.music_provider.store(std::sync::Arc::new(
+            crate::music::MusicProvider::from_config(&config, state.http_client.clone()),
+        ));
+    }
+    info!("<<< spotify user sign-in complete");
+    (StatusCode::OK, Json(serde_json::json!({ "connected": true }))).into_response()
+}
+
 async fn get_settings(State(state): State<ApiState>) -> Json<SettingsResponse> {
     let config = state.shared_config.read().await;
     Json(SettingsResponse {
@@ -407,6 +529,49 @@ async fn get_settings(State(state): State<ApiState>) -> Json<SettingsResponse> {
         },
         dev: DevSettingsResponse {
             apk_install_enabled: config.dev.apk_install_enabled,
+        },
+        music: MusicSettingsResponse {
+            provider: config.music.provider,
+            apple_configured: config.apple_music.effective_developer_token().is_some(),
+            apple_key_configured: config
+                .apple_music
+                .p8_private_key
+                .as_ref()
+                .is_some_and(|t| !t.trim().is_empty())
+                && config.apple_music.key_id.as_ref().is_some_and(|t| !t.trim().is_empty())
+                && config.apple_music.team_id.as_ref().is_some_and(|t| !t.trim().is_empty()),
+            apple_user_configured: config
+                .apple_music
+                .user_token
+                .as_ref()
+                .is_some_and(|t| !t.trim().is_empty()),
+            apple_storefront: config.apple_music.storefront.clone(),
+            spotify_configured: config
+                .spotify
+                .client_id
+                .as_ref()
+                .is_some_and(|s| !s.trim().is_empty())
+                && config
+                    .spotify
+                    .client_secret
+                    .as_ref()
+                    .is_some_and(|s| !s.trim().is_empty()),
+            spotify_playback_ready: config.spotify.username.as_ref().is_some_and(|s| !s.trim().is_empty())
+                && config.spotify.password.as_ref().is_some_and(|s| !s.trim().is_empty()),
+            spotify_user_configured: config
+                .spotify
+                .refresh_token
+                .as_ref()
+                .is_some_and(|s| !s.trim().is_empty()),
+            spotify_client_id: config
+                .spotify
+                .client_id
+                .as_ref()
+                .filter(|s| !s.trim().is_empty())
+                .cloned(),
+            spotify_market: config.spotify.market.clone(),
+            mopidy_url: config.mopidy.url.clone(),
+            mopidy_stream_url: config.mopidy.stream_url.clone(),
         },
     })
 }
@@ -741,8 +906,35 @@ struct UpdateSettingsRequest {
     weather: Option<UpdateWeatherSettings>,
     contacts: Option<UpdateContactsSettings>,
     dev: Option<UpdateDevSettings>,
+    music: Option<UpdateMusicSettings>,
     /// Storage is read-only; presence in the request is rejected.
     storage: Option<serde_json::Value>,
+}
+
+/// Music provider selection + credentials. Empty string clears a credential.
+/// Provider/credential changes take effect on the next server restart (the shim
+/// provider is built at startup).
+#[derive(Deserialize)]
+struct UpdateMusicSettings {
+    provider: Option<MusicProviderKind>,
+    apple_developer_token: Option<String>,
+    /// Music User Token from MusicKit-JS sign-in in Center. Enables the `/v1/me`
+    /// personalized endpoints (library, mixes, favorites).
+    apple_user_token: Option<String>,
+    /// MusicKit `.p8` private key + its Key ID + Team ID. When set, the server
+    /// mints the developer token itself (self-refreshing).
+    apple_p8_private_key: Option<String>,
+    apple_key_id: Option<String>,
+    apple_team_id: Option<String>,
+    apple_storefront: Option<String>,
+    /// Mopidy server URL + Icecast stream URL (the "bring your own providers"
+    /// backend). Not secrets — plain URLs.
+    mopidy_url: Option<String>,
+    mopidy_stream_url: Option<String>,
+    spotify_client_id: Option<String>,
+    spotify_client_secret: Option<String>,
+    spotify_username: Option<String>,
+    spotify_password: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1069,6 +1261,52 @@ async fn update_settings(
         }
     }
 
+    // --- Music changes (take effect on next restart) ---
+    if let Some(ref music) = body.music {
+        let opt = |s: &String| if s.trim().is_empty() { None } else { Some(s.clone()) };
+        if let Some(provider) = music.provider {
+            config.music.provider = provider;
+        }
+        if let Some(ref v) = music.apple_developer_token {
+            config.apple_music.developer_token = opt(v);
+        }
+        if let Some(ref v) = music.apple_user_token {
+            config.apple_music.user_token = opt(v);
+        }
+        if let Some(ref v) = music.apple_p8_private_key {
+            config.apple_music.p8_private_key = opt(v);
+        }
+        if let Some(ref v) = music.apple_key_id {
+            config.apple_music.key_id = opt(v);
+        }
+        if let Some(ref v) = music.apple_team_id {
+            config.apple_music.team_id = opt(v);
+        }
+        if let Some(ref v) = music.apple_storefront {
+            if !v.trim().is_empty() {
+                config.apple_music.storefront = v.clone();
+            }
+        }
+        if let Some(ref v) = music.spotify_client_id {
+            config.spotify.client_id = opt(v);
+        }
+        if let Some(ref v) = music.spotify_client_secret {
+            config.spotify.client_secret = opt(v);
+        }
+        if let Some(ref v) = music.spotify_username {
+            config.spotify.username = opt(v);
+        }
+        if let Some(ref v) = music.spotify_password {
+            config.spotify.password = opt(v);
+        }
+        if let Some(ref v) = music.mopidy_url {
+            config.mopidy.url = opt(v);
+        }
+        if let Some(ref v) = music.mopidy_stream_url {
+            config.mopidy.stream_url = opt(v);
+        }
+    }
+
     let new_resolved = Arc::new(ResolvedConfig::resolve(config.clone()));
 
     // --- Validate: build a new LLM/AiBus tree before committing ---
@@ -1108,6 +1346,8 @@ async fn update_settings(
                 state.http_client.clone(),
                 state.db.clone(),
                 memory,
+                state.music_provider.load_full(),
+                state.now_playing.clone(),
             ));
             state.aibus.replace(new_aibus).await;
             state.dedup.clear().await;
@@ -1133,6 +1373,24 @@ async fn update_settings(
         warn!(error = %e, "failed to persist config to disk (in-memory changes are still active)");
         // Don't fail the request — in-memory state is already updated.
         // The user can retry or manually fix the file.
+    }
+    // Music provider + credentials (incl. Apple tokens) are secrets and live in
+    // `config.local.toml`, which overrides the base file at load — `persist_config`
+    // deliberately does not touch them, so persist them there instead. Without
+    // this a Center Apple-Music sign-in would be lost on the next restart.
+    if body.music.is_some() {
+        if let Err(e) = persist_music_local(&state.config_path, &config) {
+            warn!(error = %e, "failed to persist music config to config.local.toml");
+        }
+        // Re-publish the effective Apple tokens for the on-device player so a
+        // sign-in / .p8 change reaches it (also written at startup).
+        crate::music::write_device_tokens(&config, &state.config_path);
+        // Hot-swap the active provider so the change applies with no restart:
+        // the shim reads this live, and the AiBus rebuild below re-snapshots it.
+        state.music_provider.store(std::sync::Arc::new(
+            crate::music::MusicProvider::from_config(&config, state.http_client.clone()),
+        ));
+        info!(provider = state.music_provider.load().name(), "hot-swapped music provider");
     }
 
     // Build response from the updated config.
@@ -1180,6 +1438,49 @@ async fn update_settings(
         },
         dev: DevSettingsResponse {
             apk_install_enabled: config.dev.apk_install_enabled,
+        },
+        music: MusicSettingsResponse {
+            provider: config.music.provider,
+            apple_configured: config.apple_music.effective_developer_token().is_some(),
+            apple_key_configured: config
+                .apple_music
+                .p8_private_key
+                .as_ref()
+                .is_some_and(|t| !t.trim().is_empty())
+                && config.apple_music.key_id.as_ref().is_some_and(|t| !t.trim().is_empty())
+                && config.apple_music.team_id.as_ref().is_some_and(|t| !t.trim().is_empty()),
+            apple_user_configured: config
+                .apple_music
+                .user_token
+                .as_ref()
+                .is_some_and(|t| !t.trim().is_empty()),
+            apple_storefront: config.apple_music.storefront.clone(),
+            spotify_configured: config
+                .spotify
+                .client_id
+                .as_ref()
+                .is_some_and(|s| !s.trim().is_empty())
+                && config
+                    .spotify
+                    .client_secret
+                    .as_ref()
+                    .is_some_and(|s| !s.trim().is_empty()),
+            spotify_playback_ready: config.spotify.username.as_ref().is_some_and(|s| !s.trim().is_empty())
+                && config.spotify.password.as_ref().is_some_and(|s| !s.trim().is_empty()),
+            spotify_user_configured: config
+                .spotify
+                .refresh_token
+                .as_ref()
+                .is_some_and(|s| !s.trim().is_empty()),
+            spotify_client_id: config
+                .spotify
+                .client_id
+                .as_ref()
+                .filter(|s| !s.trim().is_empty())
+                .cloned(),
+            spotify_market: config.spotify.market.clone(),
+            mopidy_url: config.mopidy.url.clone(),
+            mopidy_stream_url: config.mopidy.stream_url.clone(),
         },
     };
 
@@ -1358,6 +1659,90 @@ fn persist_config_inner(
     std::fs::write(config_path, doc.to_string())?;
     info!(path = %config_path.display(), "config persisted to disk");
 
+    Ok(())
+}
+
+/// Persist music provider + credentials to `config.local.toml` (the git-ignored
+/// local override that wins at load), since [`persist_config`] only writes the
+/// base file's non-secret sections. Creates the file if absent, preserving any
+/// existing local overrides.
+fn persist_music_local(
+    config_path: &std::path::Path,
+    config: &Config,
+) -> Result<(), String> {
+    persist_music_local_inner(config_path, config).map_err(|e| e.to_string())
+}
+
+fn persist_music_local_inner(
+    config_path: &std::path::Path,
+    config: &Config,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use toml_edit::DocumentMut;
+
+    let local_path = config_path
+        .parent()
+        .map(|p| p.join("config.local.toml"))
+        .ok_or("cannot derive config.local.toml path")?;
+
+    let mut doc: DocumentMut = if local_path.exists() {
+        std::fs::read_to_string(&local_path)?.parse()?
+    } else {
+        DocumentMut::new()
+    };
+
+    fn ensure_table<'a>(doc: &'a mut DocumentMut, key: &str) -> &'a mut toml_edit::Item {
+        if doc.get(key).and_then(|i| i.as_table()).is_none() {
+            doc[key] = toml_edit::Item::Table(toml_edit::Table::new());
+        }
+        &mut doc[key]
+    }
+    // Set a key from an Option, removing it when empty so cleared secrets don't
+    // linger in the file.
+    fn set_opt(table: &mut toml_edit::Item, key: &str, val: &Option<String>) {
+        match val {
+            Some(v) if !v.trim().is_empty() => table[key] = toml_edit::value(v),
+            _ => {
+                if let Some(t) = table.as_table_mut() {
+                    t.remove(key);
+                }
+            }
+        }
+    }
+
+    {
+        let table = ensure_table(&mut doc, "music");
+        table["provider"] = toml_edit::value(match config.music.provider {
+            MusicProviderKind::Apple => "apple",
+            MusicProviderKind::Spotify => "spotify",
+            MusicProviderKind::Youtube => "youtube",
+            MusicProviderKind::Mopidy => "mopidy",
+        });
+    }
+    {
+        let table = ensure_table(&mut doc, "apple_music");
+        set_opt(table, "developer_token", &config.apple_music.developer_token);
+        set_opt(table, "user_token", &config.apple_music.user_token);
+        set_opt(table, "p8_private_key", &config.apple_music.p8_private_key);
+        set_opt(table, "key_id", &config.apple_music.key_id);
+        set_opt(table, "team_id", &config.apple_music.team_id);
+        table["storefront"] = toml_edit::value(&config.apple_music.storefront);
+    }
+    {
+        let table = ensure_table(&mut doc, "spotify");
+        set_opt(table, "client_id", &config.spotify.client_id);
+        set_opt(table, "client_secret", &config.spotify.client_secret);
+        set_opt(table, "username", &config.spotify.username);
+        set_opt(table, "password", &config.spotify.password);
+        set_opt(table, "refresh_token", &config.spotify.refresh_token);
+    }
+    {
+        let table = ensure_table(&mut doc, "mopidy");
+        set_opt(table, "url", &config.mopidy.url);
+        set_opt(table, "stream_url", &config.mopidy.stream_url);
+    }
+
+    std::fs::write(&local_path, doc.to_string())?;
+    info!(path = %local_path.display(), "music config persisted to config.local.toml");
     Ok(())
 }
 

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use tracing::info;
 
 /// Top-level configuration, loaded from `config.toml`.
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct Config {
     #[serde(default)]
     pub llm: LlmConfig,
@@ -19,6 +19,16 @@ pub struct Config {
     pub logging: LoggingConfig,
     #[serde(default)]
     pub dev: DevConfig,
+    #[serde(default)]
+    pub apple_music: AppleMusicConfig,
+    #[serde(default)]
+    pub music: MusicConfig,
+    #[serde(default)]
+    pub spotify: SpotifyConfig,
+    #[serde(default)]
+    pub youtube: YoutubeConfig,
+    #[serde(default)]
+    pub mopidy: MopidyConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -87,6 +97,11 @@ pub struct LlmConfig {
     /// Enable provider-hosted web search grounding (currently only Gemini and OpenAI)
     #[serde(default)]
     pub web_search: bool,
+
+    /// Max output tokens per completion. Anthropic *requires* this to be set, so
+    /// it is always applied to the agent regardless of provider.
+    #[serde(default = "default_max_tokens")]
+    pub max_tokens: u64,
 
     /// Server-local native LLM tools.
     #[serde(default)]
@@ -197,6 +212,189 @@ pub struct WeatherConfig {
     pub pirate_weather_api_key: Option<String>,
 }
 
+/// Which music backend the Tidal shim serves. Apple plays on-device via the
+/// MusicKit hook (software FairPlay); Spotify/YouTube stream from the server.
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MusicProviderKind {
+    #[default]
+    Apple,
+    Spotify,
+    Youtube,
+    Mopidy,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct MusicConfig {
+    /// Active music provider: "apple" (default), "spotify", or "youtube".
+    #[serde(default)]
+    pub provider: MusicProviderKind,
+}
+
+/// Spotify Web API credentials (client-credentials flow — app-level, no user
+/// login needed for catalog search/metadata). Playback additionally needs a
+/// Premium account and the `spotify-playback` build feature (librespot).
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct SpotifyConfig {
+    #[serde(default)]
+    pub client_id: Option<String>,
+    #[serde(default)]
+    pub client_secret: Option<String>,
+    /// ISO market for catalog results.
+    #[serde(default = "default_spotify_market")]
+    pub market: String,
+    /// Premium account (for librespot playback). Off-device secrets only.
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    /// OAuth (PKCE) refresh token from a user's Center sign-in. Enables the
+    /// `/me` library endpoints (saved tracks, playlists). Secret.
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+
+    /// A `streaming`-scoped Spotify access token for librespot playback (Premium
+    /// only). This is a SEPARATE token from `refresh_token` above — Spotify
+    /// removed password auth, so librespot needs its own OAuth (desktop client).
+    /// Used only in the `spotify-playback` build. Secret.
+    #[serde(default)]
+    pub streaming_token: Option<String>,
+}
+
+impl Default for SpotifyConfig {
+    fn default() -> Self {
+        Self {
+            client_id: None,
+            client_secret: None,
+            market: default_spotify_market(),
+            username: None,
+            password: None,
+            refresh_token: None,
+            streaming_token: None,
+        }
+    }
+}
+
+fn default_spotify_market() -> String {
+    "US".to_string()
+}
+
+/// YouTube Music settings. Search/metadata + stream resolution run server-side;
+/// activating real streaming needs the `youtube-playback` build feature.
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct YoutubeConfig {
+    /// Optional cookies file (Netscape format) for age/region-gated tracks.
+    #[serde(default)]
+    pub cookies_path: Option<String>,
+}
+
+/// Mopidy backend: delegate search/library/playback to a user-run Mopidy server
+/// (see `external::mopidy`). The "bring your own providers" option.
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct MopidyConfig {
+    /// Base URL of the Mopidy HTTP server, e.g. `http://192.168.1.20:6680`.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Icecast MP3 stream URL that Mopidy's audio output is sent to (and the
+    /// device plays), e.g. `http://192.168.1.20:8000/mopidy`.
+    #[serde(default)]
+    pub stream_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct AppleMusicConfig {
+    /// Apple Music developer token (ES256 JWT). When set, the Tidal shim serves
+    /// real catalog metadata and search from `api.music.apple.com`; when empty
+    /// the shim falls back to static PoC data. Keep the token in the git-ignored
+    /// `config.local.toml` — it is a secret. (Phase 3.5 will sign this from the
+    /// MusicKit `.p8` instead of pasting a fixed token.)
+    #[serde(default)]
+    pub developer_token: Option<String>,
+
+    /// Music User Token for the signed-in account. Enables the `/v1/me`
+    /// personalized endpoints (library, made-for-you mixes, favorites). Obtained
+    /// via MusicKit-JS sign-in in Center and delivered like the other secrets;
+    /// keep it in `config.local.toml`. Absent = catalog-only.
+    #[serde(default)]
+    pub user_token: Option<String>,
+
+    /// MusicKit `.p8` private key (PKCS#8 PEM contents). With `key_id` +
+    /// `team_id` the server mints (and refreshes) the developer token itself, so
+    /// a user supplies their own Apple credentials once instead of pasting a
+    /// hand-signed token that expires every ≤6 months. Secret — keep it in
+    /// `config.local.toml`.
+    #[serde(default)]
+    pub p8_private_key: Option<String>,
+
+    /// Key ID (10 chars) of the MusicKit `.p8` key, from the Apple Developer
+    /// portal.
+    #[serde(default)]
+    pub key_id: Option<String>,
+
+    /// Apple Developer Team ID (10 chars).
+    #[serde(default)]
+    pub team_id: Option<String>,
+
+    /// Apple Music storefront (country) for catalog lookups.
+    #[serde(default = "default_apple_storefront")]
+    pub storefront: String,
+
+    /// Catalog song id played by "play music" (no search term).
+    #[serde(default = "default_apple_song")]
+    pub default_song_id: String,
+}
+
+impl AppleMusicConfig {
+    /// The developer token to use for all Apple calls (catalog, `/me`, MusicKit
+    /// JS, on-device player). Prefers minting a fresh token from the `.p8`
+    /// credentials (self-refreshing); falls back to a manually-pasted
+    /// `developer_token`. Returns `None` when neither is configured.
+    pub fn effective_developer_token(&self) -> Option<String> {
+        let nonempty = |o: &Option<String>| o.as_ref().filter(|s| !s.trim().is_empty()).cloned();
+        if let (Some(p8), Some(kid), Some(team)) = (
+            nonempty(&self.p8_private_key),
+            nonempty(&self.key_id),
+            nonempty(&self.team_id),
+        ) {
+            match crate::external::apple_token::mint_developer_token(
+                &p8,
+                &kid,
+                &team,
+                crate::external::apple_token::DEFAULT_TTL_SECS,
+                crate::external::apple_token::now_unix(),
+            ) {
+                Ok(token) => return Some(token),
+                Err(error) => {
+                    tracing::warn!(error = %error, "apple: minting developer token from .p8 failed; falling back to manual token")
+                }
+            }
+        }
+        nonempty(&self.developer_token)
+    }
+}
+
+impl Default for AppleMusicConfig {
+    fn default() -> Self {
+        Self {
+            developer_token: None,
+            user_token: None,
+            p8_private_key: None,
+            key_id: None,
+            team_id: None,
+            storefront: default_apple_storefront(),
+            default_song_id: default_apple_song(),
+        }
+    }
+}
+
+fn default_apple_storefront() -> String {
+    "us".to_string()
+}
+
+fn default_apple_song() -> String {
+    "1440650711".to_string() // Bohemian Rhapsody
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct ContactsConfig {
     /// Treat all contacts/numbers as trusted at runtime.
@@ -250,6 +448,10 @@ impl Default for LoggingConfig {
 
 // --- defaults ---
 
+fn default_max_tokens() -> u64 {
+    4096
+}
+
 fn default_provider() -> LlmProvider {
     LlmProvider::Echo
 }
@@ -263,7 +465,7 @@ fn default_llm_tools_enabled() -> bool {
 }
 
 fn default_dynamic_tool_count() -> usize {
-    8
+    12
 }
 
 fn default_max_tool_turns() -> usize {
@@ -341,6 +543,7 @@ impl Default for LlmConfig {
             api_key: None,
             base_url: None,
             web_search: false,
+            max_tokens: default_max_tokens(),
             tools: LlmToolsConfig::default(),
             memory: LlmMemoryConfig::default(),
         }
@@ -825,6 +1028,59 @@ public_addr = "192.0.2.10:8080"
         assert_eq!(config.llm.model, "gpt-4.1-mini");
         assert_eq!(config.server.public_addr, "192.0.2.10:8080");
         assert_eq!(config.server.http_bind_addr, default_http_bind_addr());
+        // max_tokens defaults when omitted (Anthropic requires it be set).
+        assert_eq!(config.llm.max_tokens, default_max_tokens());
+    }
+
+    #[test]
+    fn defaults_music_provider_to_apple() {
+        let config = Config::load(std::path::Path::new("does-not-exist.toml")).unwrap();
+        assert_eq!(config.music.provider, MusicProviderKind::Apple);
+        assert_eq!(config.spotify.market, "US");
+    }
+
+    #[test]
+    fn parses_music_and_spotify_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(
+            &dir,
+            "custom.toml",
+            r#"
+[music]
+provider = "spotify"
+
+[spotify]
+client_id = "abc"
+client_secret = "def"
+market = "GB"
+"#,
+        );
+
+        let config = Config::load(&path).unwrap();
+
+        assert_eq!(config.music.provider, MusicProviderKind::Spotify);
+        assert_eq!(config.spotify.client_id.as_deref(), Some("abc"));
+        assert_eq!(config.spotify.client_secret.as_deref(), Some("def"));
+        assert_eq!(config.spotify.market, "GB");
+    }
+
+    #[test]
+    fn parses_explicit_llm_max_tokens() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(
+            &dir,
+            "custom.toml",
+            r#"
+[llm]
+provider = "anthropic"
+model = "claude-sonnet-5"
+max_tokens = 2048
+"#,
+        );
+
+        let config = Config::load(&path).unwrap();
+
+        assert_eq!(config.llm.max_tokens, 2048);
     }
 
     #[test]

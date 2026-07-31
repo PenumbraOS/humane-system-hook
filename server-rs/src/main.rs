@@ -11,6 +11,7 @@ mod dedup;
 mod esim;
 mod external;
 mod llm;
+mod music;
 mod nearby;
 mod services;
 mod storage;
@@ -321,6 +322,22 @@ async fn async_main(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
     let resolved_config = Arc::new(ResolvedConfig::resolve(config.clone()));
     let has_weather_key = resolved_config.pirate_weather_api_key.is_some();
 
+    // Music provider (Apple / Spotify / YouTube) backing the Tidal shim, plus the
+    // shared now-playing state the assistant reads.
+    let music_provider: music::SharedProvider = Arc::new(arc_swap::ArcSwap::from_pointee(
+        music::MusicProvider::from_config(&config, http_client.clone()),
+    ));
+    info!(provider = music_provider.load().name(), "music provider selected");
+    // Publish the effective Apple tokens for the on-device MusicKit player to
+    // read, so a Center login / .p8 config drives playback without a hardcoded
+    // token in the hook APK.
+    music::write_device_tokens(&config, &config_path);
+    let now_playing: music::NowPlayingHandle = Arc::new(RwLock::new(None));
+    let tidal_shim_state = services::tidal_shim::ShimState {
+        provider: music_provider.clone(),
+        now_playing: now_playing.clone(),
+    };
+
     let memory = if config.llm.memory.enabled {
         Some(
             MemoryService::open(config.llm.memory.clone())
@@ -411,6 +428,8 @@ async fn async_main(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
         http_client.clone(),
         database.clone(),
         memory.clone(),
+        music_provider.load_full(),
+        now_playing.clone(),
     );
 
     // Build the gRPC service stack as a native axum::Router.
@@ -478,6 +497,8 @@ async fn async_main(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
         esim_bridge,
         contact_client_reset_pending: Arc::new(AtomicBool::new(false)),
         device_versions,
+        music_provider: music_provider.clone(),
+        now_playing: now_playing.clone(),
     };
 
     // CORS layer for the web portal (public HTTPS → local HTTP via LNA).
@@ -546,7 +567,7 @@ async fn async_main(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
         .route("/upload/{uuid}/{filename}", put(upload_handler))
         .with_state(upload_state)
         .merge(api_router)
-        .merge(services::tidal_shim::router())
+        .merge(services::tidal_shim::router(tidal_shim_state))
         .fallback(fallback_handler)
         .layer(trace_layer);
 

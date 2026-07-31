@@ -47,6 +47,12 @@ android {
             // from inside the target process (ironman).
             useLegacyPackaging = true
 
+            // The MusicKit AAR's own libc++_shared.so is stripped out of the AAR
+            // (hook/libs) so everything links against AliuHook's newer libc++
+            // (its liblsplant.so needs symbols the older Apple libc++ lacks).
+            // Prebuilt Apple SDK lib — don't let AGP strip it.
+            keepDebugSymbols += "**/libappleMusicSDK.so"
+
             if (includeFrida) {
                 // Prevent AGP from stripping Frida Gadget files:
                 // - libfrida-gadget.so must not be stripped (breaks the binary)
@@ -84,4 +90,10 @@ android {
 
 dependencies {
     implementation("com.aliucord:Aliuhook:1.1.4")
+
+    // Apple MusicKit Android SDK (vendored under hook/libs, git-excluded — Apple's
+    // SDK, not ours to commit). mediaplayback ships arm64 libappleMusicSDK.so
+    // (self-contained software FairPlay); musickitauth provides TokenProvider.
+    implementation(files("libs/mediaplayback-release-1.1.1.aar"))
+    implementation(files("libs/musickitauth-release-1.1.2.aar"))
 }

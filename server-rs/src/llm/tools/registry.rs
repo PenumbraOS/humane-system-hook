@@ -20,6 +20,7 @@ use super::fastembed;
 #[cfg(target_os = "android")]
 use super::logcat::DumpLogcatTool;
 use super::nearby_search::NearbySearchTool;
+use super::control_music::ControlMusicTool;
 use super::play_music::PlayMusicTool;
 use super::reverse_geocode::ReverseGeocodeTool;
 use super::understand_scene::UnderstandSceneTool;
@@ -69,7 +70,8 @@ impl LlmToolContext {
             .dynamic_tool(NearbySearchTool::new(self.nearby_client.clone()))
             .dynamic_tool(ReverseGeocodeTool::new(self.osm.clone()))
             .dynamic_tool(UnderstandSceneTool)
-            .dynamic_tool(PlayMusicTool);
+            .dynamic_tool(PlayMusicTool)
+            .dynamic_tool(ControlMusicTool);
 
         #[cfg(target_os = "android")]
         let builder = builder.dynamic_tool(DumpLogcatTool);
