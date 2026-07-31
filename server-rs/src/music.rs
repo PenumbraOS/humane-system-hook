@@ -22,7 +22,6 @@ use crate::config::{Config, MusicProviderKind};
 use crate::external::apple_music::{AppleMusicClient, AppleSong};
 use crate::external::mopidy::MopidyClient;
 use crate::external::spotify::SpotifyClient;
-use crate::external::youtube::YoutubeClient;
 
 /// Loopback base the device fetches server-decoded streams from (same host the
 /// tone-loopback test used). Spotify/YouTube playback URLs live under here.
@@ -153,7 +152,6 @@ impl From<AppleSong> for ProviderTrack {
 pub enum MusicProvider {
     Apple(Arc<AppleMusicClient>),
     Spotify(Arc<SpotifyClient>),
-    Youtube(Arc<YoutubeClient>),
     Mopidy(Arc<MopidyClient>),
     /// The selected provider is missing credentials/config; `reason` explains.
     Unconfigured {
@@ -208,10 +206,6 @@ impl MusicProvider {
                     },
                 }
             }
-            MusicProviderKind::Youtube => MusicProvider::Youtube(Arc::new(YoutubeClient::new(
-                http,
-                config.youtube.cookies_path.clone(),
-            ))),
             MusicProviderKind::Mopidy => {
                 match (
                     config.mopidy.url.as_ref().filter(|s| !s.trim().is_empty()),
@@ -233,7 +227,6 @@ impl MusicProvider {
         match self {
             MusicProvider::Apple(_) => "apple",
             MusicProvider::Spotify(_) => "spotify",
-            MusicProvider::Youtube(_) => "youtube",
             MusicProvider::Mopidy(_) => "mopidy",
             MusicProvider::Unconfigured { kind, .. } => kind_name(*kind),
         }
@@ -246,7 +239,6 @@ impl MusicProvider {
                 client.search_top_song(term).await.map(|o| o.map(Into::into))
             }
             MusicProvider::Spotify(c) => c.search_top(term).await,
-            MusicProvider::Youtube(c) => c.search_top(term).await,
             MusicProvider::Mopidy(c) => c.search_top(term).await,
             MusicProvider::Unconfigured { reason, .. } => Err(reason.clone()),
         }
@@ -259,7 +251,6 @@ impl MusicProvider {
                 Ok(client.chart_songs(limit).await?.into_iter().map(Into::into).collect())
             }
             MusicProvider::Spotify(c) => c.queue(limit).await,
-            MusicProvider::Youtube(c) => c.queue(limit).await,
             MusicProvider::Mopidy(c) => c.queue(limit).await,
             MusicProvider::Unconfigured { reason, .. } => Err(reason.clone()),
         }
@@ -367,7 +358,6 @@ impl MusicProvider {
         match self {
             MusicProvider::Apple(_) => format!("{APPLE_SENTINEL}{id}"),
             MusicProvider::Spotify(_) => format!("{STREAM_BASE}/spotify/{id}"),
-            MusicProvider::Youtube(_) => format!("{STREAM_BASE}/youtube/{id}"),
             // Mopidy plays internally; the device loads its Icecast stream URL
             // (constant), and the shim points Mopidy at this track first.
             MusicProvider::Mopidy(c) => c.stream_url().to_string(),
@@ -398,7 +388,7 @@ impl MusicProvider {
                     track_count: e.track_count.unwrap_or(50).max(1),
                 }
             })),
-            MusicProvider::Spotify(_) | MusicProvider::Youtube(_) | MusicProvider::Mopidy(_) => {
+            MusicProvider::Spotify(_) | MusicProvider::Mopidy(_) => {
                 Ok(Some(search_synthetic(term)))
             }
             MusicProvider::Unconfigured { reason, .. } => Err(reason.clone()),
@@ -412,7 +402,6 @@ impl MusicProvider {
                 Ok(c.artist_top_songs(id, limit).await?.into_iter().map(Into::into).collect())
             }
             MusicProvider::Spotify(c) => c.search_songs(&decoded(id), limit).await,
-            MusicProvider::Youtube(c) => c.search_songs(&decoded(id), limit).await,
             MusicProvider::Mopidy(c) => c.search_songs(&decoded(id), limit).await,
             MusicProvider::Unconfigured { reason, .. } => Err(reason.clone()),
         }
@@ -428,7 +417,7 @@ impl MusicProvider {
                     track_count: e.track_count.unwrap_or(12).max(1),
                 }
             })),
-            MusicProvider::Spotify(_) | MusicProvider::Youtube(_) | MusicProvider::Mopidy(_) => {
+            MusicProvider::Spotify(_) | MusicProvider::Mopidy(_) => {
                 Ok(Some(search_synthetic(term)))
             }
             MusicProvider::Unconfigured { reason, .. } => Err(reason.clone()),
@@ -442,7 +431,6 @@ impl MusicProvider {
                 Ok(c.album_tracks(id, limit).await?.into_iter().map(Into::into).collect())
             }
             MusicProvider::Spotify(c) => c.search_songs(&decoded(id), limit).await,
-            MusicProvider::Youtube(c) => c.search_songs(&decoded(id), limit).await,
             MusicProvider::Mopidy(c) => c.search_songs(&decoded(id), limit).await,
             MusicProvider::Unconfigured { reason, .. } => Err(reason.clone()),
         }
@@ -458,7 +446,7 @@ impl MusicProvider {
                     track_count: e.track_count.unwrap_or(25).max(1),
                 }
             })),
-            MusicProvider::Spotify(_) | MusicProvider::Youtube(_) | MusicProvider::Mopidy(_) => {
+            MusicProvider::Spotify(_) | MusicProvider::Mopidy(_) => {
                 Ok(Some(search_synthetic(term)))
             }
             MusicProvider::Unconfigured { reason, .. } => Err(reason.clone()),
@@ -472,7 +460,6 @@ impl MusicProvider {
                 Ok(c.playlist_tracks(id, limit).await?.into_iter().map(Into::into).collect())
             }
             MusicProvider::Spotify(c) => c.search_songs(&decoded(id), limit).await,
-            MusicProvider::Youtube(c) => c.search_songs(&decoded(id), limit).await,
             MusicProvider::Mopidy(c) => c.search_songs(&decoded(id), limit).await,
             MusicProvider::Unconfigured { reason, .. } => Err(reason.clone()),
         }
@@ -490,7 +477,6 @@ impl MusicProvider {
                 Ok(songs.into_iter().map(Into::into).collect())
             }
             MusicProvider::Spotify(c) => c.search_songs(genre, limit).await,
-            MusicProvider::Youtube(c) => c.search_songs(genre, limit).await,
             MusicProvider::Mopidy(c) => c.search_songs(genre, limit).await,
             MusicProvider::Unconfigured { reason, .. } => Err(reason.clone()),
         }
@@ -550,7 +536,6 @@ fn kind_name(kind: MusicProviderKind) -> &'static str {
     match kind {
         MusicProviderKind::Apple => "apple",
         MusicProviderKind::Spotify => "spotify",
-        MusicProviderKind::Youtube => "youtube",
         MusicProviderKind::Mopidy => "mopidy",
     }
 }
@@ -576,11 +561,16 @@ mod tests {
     }
 
     #[test]
-    fn spotify_and_youtube_playback_urls_point_at_local_stream() {
-        let sp = MusicProvider::Youtube(Arc::new(YoutubeClient::new(reqwest::Client::new(), None)));
+    fn spotify_playback_url_points_at_local_stream() {
+        let sp = MusicProvider::Spotify(Arc::new(SpotifyClient::new(
+            reqwest::Client::new(),
+            "id".into(),
+            "secret".into(),
+            "US".into(),
+        )));
         assert_eq!(
-            sp.playback_url("vid"),
-            "http://127.0.0.1:8080/tidal-shim/stream/youtube/vid"
+            sp.playback_url("trk"),
+            "http://127.0.0.1:8080/tidal-shim/stream/spotify/trk"
         );
     }
 

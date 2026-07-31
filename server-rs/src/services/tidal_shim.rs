@@ -467,35 +467,6 @@ async fn stream_audio(
 ) -> impl IntoResponse {
     info!(provider = %provider, id = %id, "<<< tidal-shim stream request");
     match (provider.as_str(), state.provider().as_ref()) {
-        ("youtube", MusicProvider::Youtube(client)) => match client.resolve_audio(&id).await {
-            Ok(audio) => {
-                let http = client.http();
-                let segments = audio.segments;
-                info!(segments = segments.len(), content_type = audio.content_type, "<<< tidal-shim youtube stream");
-                // Pull each HLS audio segment server-side (device IP) and pipe it
-                // straight through; ExoPlayer plays the concatenation progressively.
-                let body = async_stream::stream! {
-                    for url in segments {
-                        match http.get(&url).send().await.and_then(|r| r.error_for_status()) {
-                            Ok(resp) => match resp.bytes().await {
-                                Ok(bytes) => yield Ok::<_, std::io::Error>(bytes),
-                                Err(error) => { warn!(%error, "youtube segment read failed"); break; }
-                            },
-                            Err(error) => { warn!(%error, "youtube segment fetch failed"); break; }
-                        }
-                    }
-                };
-                (
-                    [(header::CONTENT_TYPE, audio.content_type)],
-                    axum::body::Body::from_stream(body),
-                )
-                    .into_response()
-            }
-            Err(error) => {
-                warn!(%error, "youtube stream resolve failed");
-                (StatusCode::BAD_GATEWAY, error).into_response()
-            }
-        },
         #[cfg(feature = "spotify-playback")]
         ("spotify", MusicProvider::Spotify(client)) => {
             let Some(token) = client.streaming_token() else {

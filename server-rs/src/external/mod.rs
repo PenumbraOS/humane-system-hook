@@ -6,4 +6,3 @@ pub mod spotify_playback;
 pub mod osm;
 pub mod spotify;
 pub mod weather;
-pub mod youtube;

@@ -26,8 +26,6 @@ pub struct Config {
     #[serde(default)]
     pub spotify: SpotifyConfig,
     #[serde(default)]
-    pub youtube: YoutubeConfig,
-    #[serde(default)]
     pub mopidy: MopidyConfig,
 }
 
@@ -220,7 +218,6 @@ pub enum MusicProviderKind {
     #[default]
     Apple,
     Spotify,
-    Youtube,
     Mopidy,
 }
 
@@ -277,15 +274,6 @@ impl Default for SpotifyConfig {
 
 fn default_spotify_market() -> String {
     "US".to_string()
-}
-
-/// YouTube Music settings. Search/metadata + stream resolution run server-side;
-/// activating real streaming needs the `youtube-playback` build feature.
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
-pub struct YoutubeConfig {
-    /// Optional cookies file (Netscape format) for age/region-gated tracks.
-    #[serde(default)]
-    pub cookies_path: Option<String>,
 }
 
 /// Mopidy backend: delegate search/library/playback to a user-run Mopidy server

@@ -213,7 +213,9 @@ impl MopidyClient {
         Ok(())
     }
 
-    /// Transport proxied to Mopidy (for voice control_music actions).
+    /// Transport proxied to Mopidy (for voice control_music actions). Reserved
+    /// for wiring control_music -> Mopidy so pause/next stay in sync.
+    #[allow(dead_code)]
     pub async fn transport(&self, action: &str) -> Result<(), String> {
         let method = match action {
             "pause" => "core.playback.pause",

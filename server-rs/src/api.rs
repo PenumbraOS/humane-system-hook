@@ -1714,7 +1714,6 @@ fn persist_music_local_inner(
         table["provider"] = toml_edit::value(match config.music.provider {
             MusicProviderKind::Apple => "apple",
             MusicProviderKind::Spotify => "spotify",
-            MusicProviderKind::Youtube => "youtube",
             MusicProviderKind::Mopidy => "mopidy",
         });
     }
