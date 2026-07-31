@@ -10,7 +10,7 @@ use tracing::info;
 use crate::config::LlmMemoryConfig;
 use crate::llm::memory::metadata::MemoryMetadata;
 use crate::llm::memory::MemoryKind;
-use crate::util::compact_whitespace;
+use crate::util::{compact_whitespace, truncate_on_char_boundary};
 
 use super::embedder::MemvidEmbedder;
 use super::types::{MemoryRecord, MemorySearchResult};
@@ -177,7 +177,7 @@ impl MemoryService {
             context.push_str(&line);
 
             if context.len() >= max_chars {
-                context.truncate(max_chars);
+                truncate_on_char_boundary(&mut context, max_chars);
                 break;
             }
         }

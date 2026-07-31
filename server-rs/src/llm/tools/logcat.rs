@@ -7,6 +7,8 @@ use serde_json::json;
 use std::path::Path;
 use tokio::process::Command;
 
+use crate::util::truncate_on_char_boundary;
+
 /// Tool that captures the full Android logcat buffer and writes it to
 /// `/sdcard/PenumbraOS/logcat/logcat_<timestamp>[_<annotation>].txt`.
 #[derive(Debug, Clone)]
@@ -163,11 +165,8 @@ fn sanitize_annotation(annotation: &str) -> String {
     }
 
     // Trim trailing underscores
-    let result = result.trim_end_matches('_').to_string();
+    let mut result = result.trim_end_matches('_').to_string();
 
-    if result.len() > 30 {
-        result[..30].to_string()
-    } else {
-        result
-    }
+    truncate_on_char_boundary(&mut result, 30);
+    result
 }
