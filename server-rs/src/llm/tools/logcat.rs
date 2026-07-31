@@ -165,9 +165,12 @@ fn sanitize_annotation(annotation: &str) -> String {
     // Trim trailing underscores
     let result = result.trim_end_matches('_').to_string();
 
-    if result.len() > 30 {
-        result[..30].to_string()
-    } else {
-        result
+    // Cap at 30 characters. `result[..30]` is a *byte* slice and panics when a
+    // multi-byte character straddles byte 30 — and the filter above keeps any
+    // `char::is_alphanumeric()` char, which includes non-ASCII letters. Slice on
+    // a char boundary instead.
+    match result.char_indices().nth(30) {
+        Some((boundary, _)) => result[..boundary].to_string(),
+        None => result,
     }
 }

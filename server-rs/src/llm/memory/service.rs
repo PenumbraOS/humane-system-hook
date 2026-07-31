@@ -177,7 +177,7 @@ impl MemoryService {
             context.push_str(&line);
 
             if context.len() >= max_chars {
-                context.truncate(max_chars);
+                truncate_on_char_boundary(&mut context, max_chars);
                 break;
             }
         }
@@ -257,5 +257,51 @@ impl MemoryService {
         })
         .await
         .map_err(|err| format!("{label} task failed: {err}"))?
+    }
+}
+
+/// Truncate `s` in place to at most `max_bytes`, floored to the nearest char
+/// boundary.
+///
+/// `String::truncate` panics when the offset splits a multi-byte character, and
+/// retrieved memory text routinely contains emoji, accented Latin, or CJK, so a
+/// raw byte length is not a safe truncation point.
+fn truncate_on_char_boundary(s: &mut String, max_bytes: usize) {
+    if s.len() <= max_bytes {
+        return;
+    }
+    let mut boundary = max_bytes;
+    while boundary > 0 && !s.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    s.truncate(boundary);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_on_char_boundary;
+
+    #[test]
+    fn floors_a_mid_character_offset_to_the_previous_boundary() {
+        // 'a' is byte 0; 'é' occupies bytes 1..3, so byte 2 splits it.
+        // `String::truncate(2)` would panic here.
+        let mut s = "aébc".to_string();
+        truncate_on_char_boundary(&mut s, 2);
+        assert_eq!(s, "a");
+    }
+
+    #[test]
+    fn keeps_an_exact_boundary_offset() {
+        let mut s = "aébc".to_string();
+        truncate_on_char_boundary(&mut s, 3);
+        assert_eq!(s, "aé");
+    }
+
+    #[test]
+    fn leaves_a_string_shorter_than_the_limit_untouched() {
+        let mut s = "hi 😀".to_string();
+        let before = s.clone();
+        truncate_on_char_boundary(&mut s, 100);
+        assert_eq!(s, before);
     }
 }
