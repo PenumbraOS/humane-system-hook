@@ -27,6 +27,8 @@ pub struct Config {
     pub spotify: SpotifyConfig,
     #[serde(default)]
     pub mopidy: MopidyConfig,
+    #[serde(default)]
+    pub tidal: TidalConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -219,6 +221,7 @@ pub enum MusicProviderKind {
     Apple,
     Spotify,
     Mopidy,
+    Tidal,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
@@ -274,6 +277,51 @@ impl Default for SpotifyConfig {
 
 fn default_spotify_market() -> String {
     "US".to_string()
+}
+
+/// Tidal backend. The device is natively a Tidal client (the shim is
+/// Tidal-shaped), so this proxies real `api.tidal.com` with the user's OAuth
+/// token and the device plays Tidal audio natively — no embedded player. Uses
+/// the device-authorization OAuth flow, which requires a *limited-input-device*
+/// (TV/streamer) `client_id`/`client_secret` — Tidal issues these only to its
+/// own apps, so users supply a reverse-engineered pair (not shipped here);
+/// secrets live in config.local.toml. Playback needs a Tidal HiFi subscription.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct TidalConfig {
+    #[serde(default)]
+    pub client_id: Option<String>,
+    #[serde(default)]
+    pub client_secret: Option<String>,
+    /// OAuth refresh token from the device-flow login.
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    /// ISO country code for catalog + playback region.
+    #[serde(default = "default_tidal_country")]
+    pub country_code: String,
+    /// Playback quality passed to `playbackinfopostpaywall` (LOW/HIGH/LOSSLESS).
+    #[serde(default = "default_tidal_quality")]
+    pub quality: String,
+}
+
+// Manual Default so an entirely-absent `[tidal]` section still gets the sane
+// country/quality (a derived Default would give empty strings).
+impl Default for TidalConfig {
+    fn default() -> Self {
+        Self {
+            client_id: None,
+            client_secret: None,
+            refresh_token: None,
+            country_code: default_tidal_country(),
+            quality: default_tidal_quality(),
+        }
+    }
+}
+
+fn default_tidal_country() -> String {
+    "US".to_string()
+}
+fn default_tidal_quality() -> String {
+    "HIGH".to_string()
 }
 
 /// Mopidy backend: delegate search/library/playback to a user-run Mopidy server

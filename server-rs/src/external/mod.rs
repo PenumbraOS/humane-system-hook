@@ -1,6 +1,7 @@
 pub mod apple_music;
 pub mod apple_token;
 pub mod mopidy;
+pub mod tidal;
 #[cfg(feature = "spotify-playback")]
 pub mod spotify_playback;
 pub mod osm;

@@ -125,6 +125,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/settings", put(update_settings))
         .route("/api/music/apple/musickit-config", get(get_musickit_config))
         .route("/api/music/spotify/exchange", put(exchange_spotify_code))
+        .route("/api/music/tidal/login/start", put(tidal_login_start))
+        .route("/api/music/tidal/login/poll", put(tidal_login_poll))
         .route("/api/events", get(event_stream))
         .route(
             "/api/cellular/service-status",
@@ -340,6 +342,12 @@ struct MusicSettingsResponse {
     /// Mopidy server + Icecast stream URLs (not secrets).
     mopidy_url: Option<String>,
     mopidy_stream_url: Option<String>,
+    /// Tidal app credentials present (client_id + secret).
+    tidal_configured: bool,
+    /// A Tidal user is signed in (refresh token stored).
+    tidal_user_configured: bool,
+    tidal_country_code: String,
+    tidal_quality: String,
 }
 
 #[derive(Serialize)]
@@ -483,6 +491,96 @@ async fn exchange_spotify_code(
     (StatusCode::OK, Json(serde_json::json!({ "connected": true }))).into_response()
 }
 
+#[derive(Serialize)]
+struct TidalLoginStartResponse {
+    device_code: String,
+    user_code: String,
+    verification_uri: String,
+    interval: u64,
+    expires_in: u64,
+}
+
+/// Build a Tidal client from config for the login flow (no refresh token yet).
+async fn tidal_login_client(
+    state: &ApiState,
+) -> Result<crate::external::tidal::TidalClient, Response> {
+    let config = state.shared_config.read().await;
+    let (Some(id), Some(secret)) = (
+        config.tidal.client_id.as_ref().filter(|s| !s.trim().is_empty()).cloned(),
+        config.tidal.client_secret.as_ref().filter(|s| !s.trim().is_empty()).cloned(),
+    ) else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "set the Tidal client_id + client_secret first".to_string(),
+        )
+            .into_response());
+    };
+    Ok(crate::external::tidal::TidalClient::new(
+        state.http_client.clone(),
+        id,
+        secret,
+        None,
+        config.tidal.country_code.clone(),
+        config.tidal.quality.clone(),
+    ))
+}
+
+/// Start Tidal's device-authorization login: returns a code the user enters at
+/// `link.tidal.com`. Center then polls `/login/poll`.
+async fn tidal_login_start(State(state): State<ApiState>) -> Response {
+    let client = match tidal_login_client(&state).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match client.start_device_login().await {
+        Ok(d) => (
+            StatusCode::OK,
+            Json(TidalLoginStartResponse {
+                device_code: d.device_code,
+                user_code: d.user_code,
+                verification_uri: d.verification_uri,
+                interval: d.interval,
+                expires_in: d.expires_in,
+            }),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, format!("Tidal login start failed: {e}")).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct TidalLoginPollRequest {
+    device_code: String,
+}
+
+/// Poll the Tidal device-login once. When the user finishes, store the refresh
+/// token + hot-swap the provider.
+async fn tidal_login_poll(
+    State(state): State<ApiState>,
+    Json(body): Json<TidalLoginPollRequest>,
+) -> Response {
+    let client = match tidal_login_client(&state).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match client.poll_login(&body.device_code).await {
+        Ok(Some(refresh)) => {
+            let mut config = state.shared_config.write().await;
+            config.tidal.refresh_token = Some(refresh);
+            if let Err(e) = persist_music_local(&state.config_path, &config) {
+                warn!(error = %e, "failed to persist tidal refresh token");
+            }
+            state.music_provider.store(std::sync::Arc::new(
+                crate::music::MusicProvider::from_config(&config, state.http_client.clone()),
+            ));
+            info!("<<< tidal user sign-in complete");
+            (StatusCode::OK, Json(serde_json::json!({ "done": true }))).into_response()
+        }
+        Ok(None) => (StatusCode::OK, Json(serde_json::json!({ "done": false }))).into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, format!("Tidal login failed: {e}")).into_response(),
+    }
+}
+
 async fn get_settings(State(state): State<ApiState>) -> Json<SettingsResponse> {
     let config = state.shared_config.read().await;
     Json(SettingsResponse {
@@ -572,6 +670,15 @@ async fn get_settings(State(state): State<ApiState>) -> Json<SettingsResponse> {
             spotify_market: config.spotify.market.clone(),
             mopidy_url: config.mopidy.url.clone(),
             mopidy_stream_url: config.mopidy.stream_url.clone(),
+            tidal_configured: config.tidal.client_id.as_ref().is_some_and(|s| !s.trim().is_empty())
+                && config.tidal.client_secret.as_ref().is_some_and(|s| !s.trim().is_empty()),
+            tidal_user_configured: config
+                .tidal
+                .refresh_token
+                .as_ref()
+                .is_some_and(|s| !s.trim().is_empty()),
+            tidal_country_code: config.tidal.country_code.clone(),
+            tidal_quality: config.tidal.quality.clone(),
         },
     })
 }
@@ -931,6 +1038,11 @@ struct UpdateMusicSettings {
     /// backend). Not secrets — plain URLs.
     mopidy_url: Option<String>,
     mopidy_stream_url: Option<String>,
+    /// Tidal app credentials + region/quality (sign-in is a separate endpoint).
+    tidal_client_id: Option<String>,
+    tidal_client_secret: Option<String>,
+    tidal_country_code: Option<String>,
+    tidal_quality: Option<String>,
     spotify_client_id: Option<String>,
     spotify_client_secret: Option<String>,
     spotify_username: Option<String>,
@@ -1305,6 +1417,22 @@ async fn update_settings(
         if let Some(ref v) = music.mopidy_stream_url {
             config.mopidy.stream_url = opt(v);
         }
+        if let Some(ref v) = music.tidal_client_id {
+            config.tidal.client_id = opt(v);
+        }
+        if let Some(ref v) = music.tidal_client_secret {
+            config.tidal.client_secret = opt(v);
+        }
+        if let Some(ref v) = music.tidal_country_code {
+            if !v.trim().is_empty() {
+                config.tidal.country_code = v.clone();
+            }
+        }
+        if let Some(ref v) = music.tidal_quality {
+            if !v.trim().is_empty() {
+                config.tidal.quality = v.clone();
+            }
+        }
     }
 
     let new_resolved = Arc::new(ResolvedConfig::resolve(config.clone()));
@@ -1481,6 +1609,15 @@ async fn update_settings(
             spotify_market: config.spotify.market.clone(),
             mopidy_url: config.mopidy.url.clone(),
             mopidy_stream_url: config.mopidy.stream_url.clone(),
+            tidal_configured: config.tidal.client_id.as_ref().is_some_and(|s| !s.trim().is_empty())
+                && config.tidal.client_secret.as_ref().is_some_and(|s| !s.trim().is_empty()),
+            tidal_user_configured: config
+                .tidal
+                .refresh_token
+                .as_ref()
+                .is_some_and(|s| !s.trim().is_empty()),
+            tidal_country_code: config.tidal.country_code.clone(),
+            tidal_quality: config.tidal.quality.clone(),
         },
     };
 
@@ -1715,6 +1852,7 @@ fn persist_music_local_inner(
             MusicProviderKind::Apple => "apple",
             MusicProviderKind::Spotify => "spotify",
             MusicProviderKind::Mopidy => "mopidy",
+            MusicProviderKind::Tidal => "tidal",
         });
     }
     {
@@ -1733,6 +1871,14 @@ fn persist_music_local_inner(
         set_opt(table, "username", &config.spotify.username);
         set_opt(table, "password", &config.spotify.password);
         set_opt(table, "refresh_token", &config.spotify.refresh_token);
+    }
+    {
+        let table = ensure_table(&mut doc, "tidal");
+        set_opt(table, "client_id", &config.tidal.client_id);
+        set_opt(table, "client_secret", &config.tidal.client_secret);
+        set_opt(table, "refresh_token", &config.tidal.refresh_token);
+        table["country_code"] = toml_edit::value(&config.tidal.country_code);
+        table["quality"] = toml_edit::value(&config.tidal.quality);
     }
     {
         let table = ensure_table(&mut doc, "mopidy");

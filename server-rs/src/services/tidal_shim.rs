@@ -417,6 +417,20 @@ async fn search_top_hits(
 /// Playback info: a `PlaybackTrackInfo` whose base64 `manifest` (BTS type)
 /// carries the provider's playback URL for the track id.
 async fn playback_info(State(state): State<ShimState>, Path(id): Path<String>) -> impl IntoResponse {
+    // Tidal: pass the device its real `playbackinfopostpaywall` response so its
+    // native Tidal player decrypts + plays from Tidal's CDN (real BTS manifest).
+    if let Some(real) = state.provider().tidal_playback_info(&id).await {
+        if let Ok(track) = state.provider().track(&id).await {
+            *state.now_playing.write().await = Some(NowPlaying {
+                title: track.title,
+                artist: track.artist,
+                album: track.album,
+            });
+        }
+        info!(track_id = %id, ">>> tidal-shim playbackinfopostpaywall (real Tidal)");
+        return Json(real).into_response();
+    }
+
     // For Mopidy, point its player at this track before handing the device the
     // (constant) Icecast stream URL, so the stream carries the right song.
     state.provider().prepare_playback(&id).await;
@@ -454,6 +468,7 @@ async fn playback_info(State(state): State<ShimState>, Path(id): Path<String>) -
         "trackPeakAmplitude": null,
         "trackReplayGain": null,
     }))
+    .into_response()
 }
 
 /// Server-decoded audio stream for non-Apple providers. YouTube resolves the

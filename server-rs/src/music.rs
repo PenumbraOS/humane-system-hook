@@ -22,6 +22,7 @@ use crate::config::{Config, MusicProviderKind};
 use crate::external::apple_music::{AppleMusicClient, AppleSong};
 use crate::external::mopidy::MopidyClient;
 use crate::external::spotify::SpotifyClient;
+use crate::external::tidal::TidalClient;
 
 /// Loopback base the device fetches server-decoded streams from (same host the
 /// tone-loopback test used). Spotify/YouTube playback URLs live under here.
@@ -153,6 +154,7 @@ pub enum MusicProvider {
     Apple(Arc<AppleMusicClient>),
     Spotify(Arc<SpotifyClient>),
     Mopidy(Arc<MopidyClient>),
+    Tidal(Arc<TidalClient>),
     /// The selected provider is missing credentials/config; `reason` explains.
     Unconfigured {
         kind: MusicProviderKind,
@@ -220,6 +222,25 @@ impl MusicProvider {
                     },
                 }
             }
+            MusicProviderKind::Tidal => {
+                match (
+                    config.tidal.client_id.as_ref().filter(|s| !s.trim().is_empty()),
+                    config.tidal.client_secret.as_ref().filter(|s| !s.trim().is_empty()),
+                ) {
+                    (Some(id), Some(secret)) => MusicProvider::Tidal(Arc::new(TidalClient::new(
+                        http,
+                        id.clone(),
+                        secret.clone(),
+                        config.tidal.refresh_token.clone(),
+                        config.tidal.country_code.clone(),
+                        config.tidal.quality.clone(),
+                    ))),
+                    _ => MusicProvider::Unconfigured {
+                        kind: MusicProviderKind::Tidal,
+                        reason: "set [tidal] client_id + client_secret, then sign in".to_string(),
+                    },
+                }
+            }
         }
     }
 
@@ -228,6 +249,7 @@ impl MusicProvider {
             MusicProvider::Apple(_) => "apple",
             MusicProvider::Spotify(_) => "spotify",
             MusicProvider::Mopidy(_) => "mopidy",
+            MusicProvider::Tidal(_) => "tidal",
             MusicProvider::Unconfigured { kind, .. } => kind_name(*kind),
         }
     }
@@ -240,6 +262,7 @@ impl MusicProvider {
             }
             MusicProvider::Spotify(c) => c.search_top(term).await,
             MusicProvider::Mopidy(c) => c.search_top(term).await,
+            MusicProvider::Tidal(c) => c.search_top(term).await,
             MusicProvider::Unconfigured { reason, .. } => Err(reason.clone()),
         }
     }
@@ -252,6 +275,7 @@ impl MusicProvider {
             }
             MusicProvider::Spotify(c) => c.queue(limit).await,
             MusicProvider::Mopidy(c) => c.queue(limit).await,
+            MusicProvider::Tidal(c) => c.queue(limit).await,
             MusicProvider::Unconfigured { reason, .. } => Err(reason.clone()),
         }
     }
@@ -295,6 +319,7 @@ impl MusicProvider {
             MusicProvider::Apple(c) => c.has_user_token(),
             MusicProvider::Spotify(c) => c.has_user_auth(),
             MusicProvider::Mopidy(_) => true,
+            MusicProvider::Tidal(c) => c.has_user_auth(),
             _ => false,
         }
     }
@@ -361,6 +386,9 @@ impl MusicProvider {
             // Mopidy plays internally; the device loads its Icecast stream URL
             // (constant), and the shim points Mopidy at this track first.
             MusicProvider::Mopidy(c) => c.stream_url().to_string(),
+            // Tidal never uses this — the shim returns Tidal's real manifest via
+            // `tidal_playback_info`, which the device's native player plays.
+            MusicProvider::Tidal(_) => format!("tidal://{id}"),
             // Unconfigured: harmless sentinel; queue/search already errored out.
             MusicProvider::Unconfigured { .. } => format!("{APPLE_SENTINEL}{id}"),
         }
@@ -388,7 +416,7 @@ impl MusicProvider {
                     track_count: e.track_count.unwrap_or(50).max(1),
                 }
             })),
-            MusicProvider::Spotify(_) | MusicProvider::Mopidy(_) => {
+            MusicProvider::Spotify(_) | MusicProvider::Mopidy(_) | MusicProvider::Tidal(_) => {
                 Ok(Some(search_synthetic(term)))
             }
             MusicProvider::Unconfigured { reason, .. } => Err(reason.clone()),
@@ -403,6 +431,7 @@ impl MusicProvider {
             }
             MusicProvider::Spotify(c) => c.search_songs(&decoded(id), limit).await,
             MusicProvider::Mopidy(c) => c.search_songs(&decoded(id), limit).await,
+            MusicProvider::Tidal(c) => c.search_songs(&decoded(id), limit).await,
             MusicProvider::Unconfigured { reason, .. } => Err(reason.clone()),
         }
     }
@@ -417,7 +446,7 @@ impl MusicProvider {
                     track_count: e.track_count.unwrap_or(12).max(1),
                 }
             })),
-            MusicProvider::Spotify(_) | MusicProvider::Mopidy(_) => {
+            MusicProvider::Spotify(_) | MusicProvider::Mopidy(_) | MusicProvider::Tidal(_) => {
                 Ok(Some(search_synthetic(term)))
             }
             MusicProvider::Unconfigured { reason, .. } => Err(reason.clone()),
@@ -432,6 +461,7 @@ impl MusicProvider {
             }
             MusicProvider::Spotify(c) => c.search_songs(&decoded(id), limit).await,
             MusicProvider::Mopidy(c) => c.search_songs(&decoded(id), limit).await,
+            MusicProvider::Tidal(c) => c.search_songs(&decoded(id), limit).await,
             MusicProvider::Unconfigured { reason, .. } => Err(reason.clone()),
         }
     }
@@ -446,7 +476,7 @@ impl MusicProvider {
                     track_count: e.track_count.unwrap_or(25).max(1),
                 }
             })),
-            MusicProvider::Spotify(_) | MusicProvider::Mopidy(_) => {
+            MusicProvider::Spotify(_) | MusicProvider::Mopidy(_) | MusicProvider::Tidal(_) => {
                 Ok(Some(search_synthetic(term)))
             }
             MusicProvider::Unconfigured { reason, .. } => Err(reason.clone()),
@@ -461,6 +491,7 @@ impl MusicProvider {
             }
             MusicProvider::Spotify(c) => c.search_songs(&decoded(id), limit).await,
             MusicProvider::Mopidy(c) => c.search_songs(&decoded(id), limit).await,
+            MusicProvider::Tidal(c) => c.search_songs(&decoded(id), limit).await,
             MusicProvider::Unconfigured { reason, .. } => Err(reason.clone()),
         }
     }
@@ -478,6 +509,7 @@ impl MusicProvider {
             }
             MusicProvider::Spotify(c) => c.search_songs(genre, limit).await,
             MusicProvider::Mopidy(c) => c.search_songs(genre, limit).await,
+            MusicProvider::Tidal(c) => c.search_songs(genre, limit).await,
             MusicProvider::Unconfigured { reason, .. } => Err(reason.clone()),
         }
     }
@@ -498,7 +530,24 @@ impl MusicProvider {
         match self {
             MusicProvider::Apple(c) => Ok(c.song(id).await?.into()),
             MusicProvider::Mopidy(c) => c.track(id).await,
+            MusicProvider::Tidal(c) => c.track(id).await,
             _ => Err("track-by-id not supported for this provider".to_string()),
+        }
+    }
+
+    /// Tidal-only: the real `playbackinfopostpaywall` response to hand the device
+    /// verbatim (its native player decrypts + plays it). `None` for other
+    /// providers, which use the synthesized manifest + `playback_url` instead.
+    pub async fn tidal_playback_info(&self, id: &str) -> Option<serde_json::Value> {
+        match self {
+            MusicProvider::Tidal(c) => match c.playback_info(id).await {
+                Ok(v) => Some(v),
+                Err(error) => {
+                    tracing::warn!(error = %error, "tidal playbackinfo failed");
+                    None
+                }
+            },
+            _ => None,
         }
     }
 }
@@ -537,6 +586,7 @@ fn kind_name(kind: MusicProviderKind) -> &'static str {
         MusicProviderKind::Apple => "apple",
         MusicProviderKind::Spotify => "spotify",
         MusicProviderKind::Mopidy => "mopidy",
+        MusicProviderKind::Tidal => "tidal",
     }
 }
 
