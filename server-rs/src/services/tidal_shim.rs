@@ -1,16 +1,17 @@
-//! Minimal Tidal-API-shaped mock served at `/tidal-shim`.
+//! Minimal Tidal-API-shaped shim served at `/tidal-shim`, backed by a
+//! [`MusicProvider`](crate::music::MusicProvider).
 //!
 //! The music experience's Tidal REST client is redirected here by the
 //! `EndpointTypeBypass` hook (host `api.tidal.com` -> this server) and fed a
-//! stub token by `TidalAuthBypass`, so it issues requests. This mock answers
-//! just enough of the "play music" chain to drive the on-device player with a
-//! local test tone — no external provider. JSON keys mirror the app's Gson
-//! models (Gson ignores missing fields, so objects are intentionally minimal);
-//! real providers plug in behind these same routes later.
+//! stub token by `TidalAuthBypass`, so it issues requests. The shim answers the
+//! "play music" chain by asking the configured provider for tracks and
+//! translating them into the app's Tidal wire format (JSON keys mirror the
+//! app's Gson models; Gson ignores missing fields, so objects are intentionally
+//! minimal). The shim never knows which provider it holds.
 
 use std::collections::HashMap;
 
-use axum::extract::{Path, Query, Request};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::header;
 use axum::response::IntoResponse;
 use axum::routing::get;
@@ -19,9 +20,10 @@ use base64::Engine as _;
 use serde_json::{json, Value};
 use tracing::{info, warn};
 
-/// Where the redirected client reaches this server (see `EndpointTypeBypass`).
-const SHIM_BASE: &str = "http://127.0.0.1:8080/tidal-shim";
+use crate::music::{ProviderTrack, SharedProvider};
+
 const PLAYLIST_UUID: &str = "poc-playlist";
+/// How many tracks to request for a queue, so next/previous have somewhere to go.
 const QUEUE_SIZE: usize = 6;
 
 // Generated test-tone parameters (44.1 kHz 16-bit mono sine).
@@ -29,7 +31,7 @@ const TONE_SAMPLE_RATE: u32 = 44100;
 const TONE_SECONDS: u32 = 20;
 const TONE_HZ: f64 = 440.0;
 
-pub fn router() -> Router {
+pub fn router(provider: SharedProvider) -> Router {
     Router::new()
         .route(
             "/tidal-shim/v1/featured/recommended/playlists",
@@ -52,6 +54,7 @@ pub fn router() -> Router {
         // Any other path: a JSON object so the client's Gson error parsing does
         // not crash on a non-object body.
         .route("/tidal-shim/{*rest}", get(unmatched).post(unmatched))
+        .with_state(provider)
 }
 
 /// One featured playlist. The body parses directly into `PlaylistSection`, whose
@@ -66,26 +69,38 @@ async fn featured_playlists() -> impl IntoResponse {
     }))
 }
 
-async fn playlist_items(Path(uuid): Path<String>) -> impl IntoResponse {
-    info!(uuid = %uuid, ">>> tidal-shim playlists/{{uuid}}/items");
-    track_item_wrapper(mock_queue())
+async fn playlist_items(
+    State(provider): State<SharedProvider>,
+    Path(uuid): Path<String>,
+) -> impl IntoResponse {
+    info!(uuid = %uuid, provider = provider.name(), ">>> tidal-shim playlists/{{uuid}}/items");
+    track_item_wrapper(tracks_json(provider.queue(QUEUE_SIZE).await))
 }
 
 /// A single track (`/tracks/{id}` — body is a bare `Track`).
-async fn single_track(Path(id): Path<String>) -> impl IntoResponse {
+async fn single_track(
+    State(provider): State<SharedProvider>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
     info!(track_id = %id, ">>> tidal-shim tracks/{{id}}");
-    Json(mock_track(&id))
+    Json(track_json_from_provider(&provider.track(&id).await))
 }
 
-async fn track_radio(Path(id): Path<String>) -> impl IntoResponse {
+async fn track_radio(
+    State(provider): State<SharedProvider>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
     info!(track_id = %id, ">>> tidal-shim tracks/{{id}}/radio");
-    wrapper(mock_queue())
+    wrapper(tracks_json(provider.recommendations(&id, QUEUE_SIZE).await))
 }
 
 /// Element shape is `{track, sources}` (played when a queue runs dry).
-async fn track_recommendations(Path(id): Path<String>) -> impl IntoResponse {
+async fn track_recommendations(
+    State(provider): State<SharedProvider>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
     info!(track_id = %id, ">>> tidal-shim tracks/{{id}}/recommendations");
-    let items: Vec<Value> = mock_queue()
+    let items: Vec<Value> = tracks_json(provider.recommendations(&id, QUEUE_SIZE).await)
         .into_iter()
         .map(|t| json!({ "track": t, "sources": ["SUGGESTED_TRACKS"] }))
         .collect();
@@ -93,17 +108,34 @@ async fn track_recommendations(Path(id): Path<String>) -> impl IntoResponse {
     Json(json!({ "items": items, "limit": n, "offset": 0, "totalNumberOfItems": n }))
 }
 
-/// Search ("play <anything>"). The track-name query reads `topHits()` and
+/// Search ("play <song>"). The track-name query reads `topHits()` and
 /// `tracks().items`; every section must be present or the client NPEs.
-async fn search_top_hits(Query(params): Query<HashMap<String, String>>) -> impl IntoResponse {
+async fn search_top_hits(
+    State(provider): State<SharedProvider>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
     let term = params
         .get("query")
         .or_else(|| params.get("term"))
         .cloned()
         .unwrap_or_default();
-    info!(term = %term, ">>> tidal-shim search/top-hits");
-    let tracks = mock_queue();
-    let top = tracks.first().cloned().unwrap_or_else(|| mock_track("mock-1"));
+    info!(term = %term, provider = provider.name(), ">>> tidal-shim search/top-hits");
+    // The requested track plays first, then related tracks so the device has a
+    // real queue instead of a single track that dead-ends on "next".
+    let tracks = match provider.search_top(&term).await {
+        Some(seed) => {
+            let mut list = vec![seed.clone()];
+            for t in provider.recommendations(&seed.id, QUEUE_SIZE).await {
+                if t.id != seed.id {
+                    list.push(t);
+                }
+            }
+            list
+        }
+        None => provider.queue(QUEUE_SIZE).await,
+    };
+    let tracks = tracks_json(tracks);
+    let top = tracks.first().cloned().unwrap_or_else(|| json!({}));
     Json(json!({
         "topHits": [ { "type": "TRACKS", "value": top } ],
         "genres": [],
@@ -115,15 +147,18 @@ async fn search_top_hits(Query(params): Query<HashMap<String, String>>) -> impl 
     }))
 }
 
-/// Playback info: a `PlaybackTrackInfo` whose base64 BTS `manifest` points every
-/// track at the local test tone.
-async fn playback_info(Path(id): Path<String>) -> impl IntoResponse {
-    info!(track_id = %id, ">>> tidal-shim playbackinfopostpaywall (mock tone)");
+/// Playback info: the provider's URL wrapped in a base64 BTS `manifest` the
+/// device's player fetches.
+async fn playback_info(
+    State(provider): State<SharedProvider>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    info!(track_id = %id, provider = provider.name(), ">>> tidal-shim playbackinfopostpaywall");
     let manifest_json = json!({
         "mimeType": "audio/wav",
         "codecs": "1",
         "encryptionType": "NONE",
-        "urls": [ format!("{SHIM_BASE}/audio/tone.wav") ],
+        "urls": [ provider.playback(&id).await ],
     });
     let manifest = base64::engine::general_purpose::STANDARD
         .encode(serde_json::to_vec(&manifest_json).unwrap_or_default());
@@ -158,18 +193,14 @@ async fn unmatched(request: Request) -> impl IntoResponse {
     Json(json!({}))
 }
 
-// ── JSON helpers (keys mirror the app's Gson models) ─────────────────────
+// ── ProviderTrack -> Tidal JSON (keys mirror the app's Gson models) ──────
 
-fn mock_queue() -> Vec<Value> {
-    (1..=QUEUE_SIZE)
-        .map(|i| mock_track(&format!("mock-{i}")))
-        .collect()
+fn tracks_json(tracks: Vec<ProviderTrack>) -> Vec<Value> {
+    tracks.iter().map(track_json_from_provider).collect()
 }
 
-/// Every id plays the same tone; the title just distinguishes queue entries so
-/// next/previous are visibly different.
-fn mock_track(id: &str) -> Value {
-    track_json(id, &format!("Penumbra Test Tone ({id})"), "Penumbra", "Shim Mock", 20)
+fn track_json_from_provider(t: &ProviderTrack) -> Value {
+    track_json(&t.id, &t.title, &t.artist, &t.album, (t.duration_ms / 1000).max(1))
 }
 
 fn track_json(id: &str, title: &str, artist: &str, album: &str, duration_secs: u64) -> Value {
@@ -243,7 +274,8 @@ fn track_item_wrapper(tracks: Vec<Value>) -> Json<Value> {
     Json(section(items))
 }
 
-/// A 20-second 440 Hz sine as a PCM WAV, used as the mock's audio for every track.
+/// A 20-second 440 Hz sine as a PCM WAV — the mock provider's audio, served here
+/// because providers do not own HTTP routes.
 fn generate_tone_wav() -> Vec<u8> {
     let sample_rate = TONE_SAMPLE_RATE;
     let num_samples = sample_rate * TONE_SECONDS;
