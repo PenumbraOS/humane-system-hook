@@ -7,6 +7,7 @@
 mod contacts;
 mod dev;
 pub mod device;
+mod settings_schema;
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -142,6 +143,7 @@ pub fn router(state: ApiState) -> Router {
             "/api/esim/download-verify-enable",
             put(esim_download_verify_enable),
         )
+        .merge(settings_schema::router())
         .with_state(state)
 }
 
