@@ -8,7 +8,7 @@ import android.util.Log
 
 /**
  * Automatically injects hooks into all target packages at boot.
- * 
+ *
  * Events should fire from within `system_server` before any targets start.
  */
 class BootInjectionReceiver : BroadcastReceiver() {
@@ -60,6 +60,9 @@ class BootInjectionReceiver : BroadcastReceiver() {
         }
 
         Log.w(TAG, "Boot injection triggered by $action")
+
+        // Bound how long PMS can hold its "User Activity" HATSLoc
+        HatsLockWatchdog.install(context)
 
         // Read target package list from hook APK's manifest meta-data
         val targetPackages = loadTargetPackages(context)

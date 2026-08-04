@@ -18,7 +18,7 @@ use crate::config::ResolvedConfig;
 use crate::llm::ChatResult;
 
 use super::backend::{LlmBackend, LlmFuture};
-use super::error::friendly_error_message;
+use super::error::{friendly_error_message, strip_query_strings};
 use super::memory::MemoryService;
 use super::prompt::PromptBuilder;
 use super::request::LlmChatRequest;
@@ -170,7 +170,7 @@ where
                     Ok(ChatResult::DeferredVision)
                 }
                 Err(e) => {
-                    error!(provider = self.provider_label, error = %e, "LLM chat failed");
+                    error!(provider = self.provider_label, error = %strip_query_strings(&e.to_string()), "LLM chat failed");
                     Err(friendly_error_message(&e))
                 }
             };

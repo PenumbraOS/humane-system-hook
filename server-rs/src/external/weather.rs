@@ -189,17 +189,18 @@ impl WeatherClient {
         let api_key = self.api_key.clone().ok_or(WeatherError::NotConfigured)?;
         let url = build_weather_url(&api_key, &request)?;
 
+        // Strip URLS from errors to avoid leaking the API key
         let response: serde_json::Value = self
             .http
             .get(&url)
             .send()
             .await
-            .map_err(WeatherError::HttpRequest)?
+            .map_err(|e| WeatherError::HttpRequest(e.without_url()))?
             .error_for_status()
-            .map_err(WeatherError::HttpRequest)?
+            .map_err(|e| WeatherError::HttpRequest(e.without_url()))?
             .json()
             .await
-            .map_err(WeatherError::ParseResponse)?;
+            .map_err(|e| WeatherError::ParseResponse(e.without_url()))?;
 
         Ok(parse_weather_report(&response, &request))
     }

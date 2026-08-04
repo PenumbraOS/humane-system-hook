@@ -1,5 +1,29 @@
 use std::fmt::Display;
 
+/// Strip query strings from any URLs in a string
+/// Intended to prevent leaking API keys in error messages
+pub fn strip_query_strings(string: &str) -> String {
+    let mut out = String::with_capacity(string.len());
+    let mut in_query_params = false;
+
+    for c in string.chars() {
+        if in_query_params {
+            if c == ')' || c.is_whitespace() {
+                in_query_params = false;
+            } else {
+                continue;
+            }
+        } else if c == '?' {
+            in_query_params = true;
+            continue;
+        }
+
+        out.push(c);
+    }
+
+    out
+}
+
 /// Convert a raw LLM provider error into a friendly, speakable sentence.
 pub fn friendly_error_message(e: &impl Display) -> String {
     let raw = e.to_string().to_lowercase();
@@ -58,5 +82,43 @@ pub fn friendly_error_message(e: &impl Display) -> String {
             .into()
     } else {
         "Something went wrong while contacting the AI service. Please try again.".into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strips_query_from_reqwest_style_url() {
+        let msg = "CompletionError: HttpError: Http client error: error sending request for url (https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?alt=sse&key=AIzaSECRET)";
+        let stripped = strip_query_strings(msg);
+        assert!(!stripped.contains("AIzaSECRET"));
+        assert!(!stripped.contains("alt=sse"));
+        assert_eq!(
+            stripped,
+            "CompletionError: HttpError: Http client error: error sending request for url (https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent)"
+        );
+    }
+
+    #[test]
+    fn passes_through_without_query() {
+        let msg = "error sending request for url (https://example.com/path)";
+        assert_eq!(strip_query_strings(msg), msg);
+    }
+
+    #[test]
+    fn resumes_after_whitespace() {
+        let msg = "failed https://a.example/x?key=SECRET then retried";
+        assert_eq!(
+            strip_query_strings(msg),
+            "failed https://a.example/x then retried"
+        );
+    }
+
+    #[test]
+    fn question_mark_at_end() {
+        assert_eq!(strip_query_strings("did it fail?"), "did it fail");
+        assert_eq!(strip_query_strings(""), "");
     }
 }
