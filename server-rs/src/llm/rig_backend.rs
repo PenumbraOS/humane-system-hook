@@ -91,7 +91,11 @@ where
         F: FnOnce(AgentBuilder<M>) -> AgentBuilder<M>,
     {
         let llm_config = &config.config.llm;
-        let builder = customize_builder(client.agent(&llm_config.model));
+        let builder = customize_builder(
+            client
+                .agent(&llm_config.model)
+                .max_tokens(llm_config.max_output_tokens),
+        );
 
         let tool_resources = if llm_config.tools.enabled {
             let tool_context = LlmToolContext::new(http_client, config, memory);
