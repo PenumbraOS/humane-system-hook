@@ -546,6 +546,7 @@ async fn async_main(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
         .route("/upload/{uuid}/{filename}", put(upload_handler))
         .with_state(upload_state)
         .merge(api_router)
+        .merge(services::tidal_shim::router())
         .fallback(fallback_handler)
         .layer(trace_layer);
 
