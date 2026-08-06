@@ -11,6 +11,7 @@ mod dedup;
 mod esim;
 mod external;
 mod llm;
+mod music;
 mod nearby;
 mod services;
 mod storage;
@@ -542,10 +543,14 @@ async fn async_main(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
             },
         );
 
+    let music_provider = music::from_config(&config);
+    info!(provider = music_provider.name(), "music provider selected");
+
     let http_app = axum::Router::new()
         .route("/upload/{uuid}/{filename}", put(upload_handler))
         .with_state(upload_state)
         .merge(api_router)
+        .merge(services::tidal_shim::router(music_provider))
         .fallback(fallback_handler)
         .layer(trace_layer);
 

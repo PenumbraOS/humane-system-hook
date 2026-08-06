@@ -24,6 +24,7 @@ serde_json = "1"
 handlebars = "6"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 async-stream = "0.3"
+async-trait = "0.1"
 rig = { version = "0.37", default-features = false, features = ["reqwest", "native-tls"], package = "rig-core" }
 rig-fastembed = { version = "0.4", default-features = false }
 toml = "0.8"
