@@ -2973,6 +2973,7 @@ dependencies = [
  "rig",
  "rig-fastembed",
  "rusqlite",
+ "schemars",
  "serde",
  "serde_json",
  "sha2 0.11.0",
