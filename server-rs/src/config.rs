@@ -19,6 +19,8 @@ pub struct Config {
     pub logging: LoggingConfig,
     #[serde(default)]
     pub dev: DevConfig,
+    #[serde(default)]
+    pub music: MusicConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -232,6 +234,26 @@ pub struct DevConfig {
     /// Enable remote APK installs.
     #[serde(default)]
     pub apk_install_enabled: bool,
+}
+
+/// Which music source backs the Tidal shim. Only `mock` (a local test tone)
+/// exists today; real providers add their own values as they land.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct MusicConfig {
+    #[serde(default = "default_music_provider")]
+    pub provider: String,
+}
+
+impl Default for MusicConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_music_provider(),
+        }
+    }
+}
+
+fn default_music_provider() -> String {
+    "mock".to_string()
 }
 
 fn default_log_file_prefix() -> String {
@@ -828,6 +850,17 @@ top_k = 3
         );
         assert!(config.llm.memory.auto_retrieve);
         assert!(!config.llm.memory.auto_remember);
+    }
+
+    #[test]
+    fn music_provider_defaults_to_mock_else_parses() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let default_path = write_config(&dir, "default.toml", "[dev]\napk_install_enabled = false\n");
+        assert_eq!(Config::load(&default_path).unwrap().music.provider, "mock");
+
+        let explicit_path = write_config(&dir, "explicit.toml", "[music]\nprovider = \"apple\"\n");
+        assert_eq!(Config::load(&explicit_path).unwrap().music.provider, "apple");
     }
 
     #[test]
