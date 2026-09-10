@@ -24,10 +24,10 @@ impl OpenAiProvider {
             "OpenAI api_key not set; configure OPENAI_API_KEY in the environment or .env, or set llm.api_key in config.toml",
         )?;
 
-        // Only real OpenAI (not "openai-compatible" custom endpoints) supports the
-        // Responses API and its hosted web_search tool.
-        let web_search_enabled =
-            llm_config.provider == LlmProvider::OpenAi && llm_config.web_search;
+        // OpenAI uses the Responses API, but "openai-compatible" custom endpoints stay on the Completions API.
+        let use_responses_api = llm_config.provider == LlmProvider::OpenAi;
+        // The hosted web_search tool is only available on the Responses API.
+        let web_search_enabled = use_responses_api && llm_config.web_search;
 
         let mut builder = providers::openai::CompletionsClient::builder()
             .api_key(&api_key)
@@ -38,13 +38,18 @@ impl OpenAiProvider {
         let client = builder.build()?;
 
         info!(
-            "OpenAI agent ready (model={}, custom_base={}, web_search={})",
+            "OpenAI agent ready (model={}, api={}, custom_base={}, web_search={})",
             llm_config.model,
+            if use_responses_api {
+                "responses"
+            } else {
+                "completions"
+            },
             llm_config.base_url.is_some(),
             web_search_enabled
         );
 
-        if web_search_enabled {
+        if use_responses_api {
             RigBackend::from_client(
                 "OpenAI",
                 client.responses_api(),
@@ -53,9 +58,13 @@ impl OpenAiProvider {
                 http_client,
                 memory,
                 |builder| {
-                    builder.additional_params(serde_json::json!({
-                        "tools": [{ "type": "web_search" }]
-                    }))
+                    if web_search_enabled {
+                        builder.additional_params(serde_json::json!({
+                            "tools": [{ "type": "web_search" }]
+                        }))
+                    } else {
+                        builder
+                    }
                 },
             )
             .await

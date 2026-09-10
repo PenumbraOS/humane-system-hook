@@ -21,8 +21,7 @@ impl RememberTool {
 #[derive(Debug, Deserialize)]
 pub struct RememberArgs {
     pub text: String,
-    #[serde(default)]
-    pub kind: MemoryKind,
+    pub kind: Option<MemoryKind>,
     pub importance: Option<f32>,
 }
 
@@ -69,7 +68,7 @@ impl Tool for RememberTool {
         let importance = args.importance.unwrap_or(0.5).clamp(0.0, 1.0);
 
         self.memory
-            .remember(text.text, args.kind, importance)
+            .remember(text.text, args.kind.unwrap_or_default(), importance)
             .await
             .map_err(Into::into)
     }
