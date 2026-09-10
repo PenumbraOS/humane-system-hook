@@ -377,7 +377,7 @@ impl AiBusHanders {
             nearby: NearbySearchHandler::new(nearby_client),
             reverse_geocode: ReverseGeocodeHandler::new(http_client.clone()),
             completion: CompletionHandler::new(agent.clone(), config.clone(), memory),
-            geolocate: GeoLocateHandler,
+            geolocate: GeoLocateHandler::new(http_client),
             stubs: StubHandler,
         }
     }
