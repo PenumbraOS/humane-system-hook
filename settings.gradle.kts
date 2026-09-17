@@ -12,8 +12,9 @@ dependencyResolutionManagement {
         mavenLocal()
         google()
         mavenCentral()
-        // Disabled due to being down
-        // maven { url = uri("https://maven.aliucord.com/releases") }
+        // Re-enabled 2026-09-17: the host is serving again (verified 200 for
+        // Aliuhook 1.1.4). :hook cannot resolve its only dependency without it.
+        maven { url = uri("https://maven.aliucord.com/releases") }
     }
 }
 

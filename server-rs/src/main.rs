@@ -16,6 +16,7 @@ mod nearby;
 mod services;
 mod storage;
 mod synapse;
+mod tts;
 mod util;
 
 /// Generated protobuf/gRPC modules.

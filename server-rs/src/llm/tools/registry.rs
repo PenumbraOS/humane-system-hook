@@ -18,6 +18,7 @@ use crate::nearby::NearbyClient;
 use super::fastembed;
 #[cfg(target_os = "android")]
 use super::logcat::DumpLogcatTool;
+use super::music::MusicControlTool;
 use super::nearby_search::NearbySearchTool;
 use super::reverse_geocode::ReverseGeocodeTool;
 use super::understand_scene::UnderstandSceneTool;
@@ -66,7 +67,10 @@ impl LlmToolContext {
         let builder = ToolSet::builder()
             .retrieved_tool(NearbySearchTool::new(self.nearby_client.clone()))
             .retrieved_tool(ReverseGeocodeTool::new(self.osm.clone()))
-            .retrieved_tool(UnderstandSceneTool);
+            .retrieved_tool(UnderstandSceneTool)
+            // Without this the assistant has no music capability at all and
+            // answers "change the song" with "I can't play music".
+            .retrieved_tool(MusicControlTool);
 
         #[cfg(target_os = "android")]
         let builder = builder.retrieved_tool(DumpLogcatTool);

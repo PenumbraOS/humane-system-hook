@@ -26,3 +26,9 @@ server-rs/media/
 
 **/config.local.toml
 logs/
+# YouTube resolver WAV cache (regenerated at runtime)
+.ytmusic-cache/
+
+# Local rig checkout, for iterating on the patched dependency.
+vendor/
+tools/__pycache__/

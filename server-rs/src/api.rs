@@ -16,7 +16,7 @@ use std::time::Duration;
 use axum::extract::{Path, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, put};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
@@ -125,6 +125,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/cellular/set-enabled", put(set_cellular_enabled))
         .route("/api/wifi/set-enabled", put(set_wifi_enabled))
         .route("/api/logs/server", get(get_server_logs))
+        // Voice synthesis for the device TTS hook.
+        .route("/api/tts", post(synthesize_tts))
         .route("/api/logs/logcat", get(get_logcat_logs))
         .nest("/api/dev", dev::router())
         .route("/api/esim/state", get(get_esim_state))
@@ -146,6 +148,56 @@ pub fn router(state: ApiState) -> Router {
 }
 
 // ─── Health ─────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct TtsRequest {
+    text: String,
+}
+
+/// Speak `text` as raw 24 kHz 16-bit mono PCM.
+///
+/// The device hook streams the body straight into Android's synthesis callback,
+/// so the response carries no container and no headers beyond the content type.
+/// Any failure here must be a non-200: the hook reads that as "use the embedded
+/// voice", which keeps the Pin talking instead of going silent.
+async fn synthesize_tts(State(state): State<ApiState>, Json(request): Json<TtsRequest>) -> Response {
+    let text = request.text.trim().to_string();
+    if text.is_empty() {
+        return (StatusCode::BAD_REQUEST, "text is required").into_response();
+    }
+
+    let config = state.shared_config.read().await.clone();
+    let Some(provider) = crate::tts::from_config(&config, state.http_client.clone()) else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no TTS provider configured",
+        )
+            .into_response();
+    };
+
+    let started = std::time::Instant::now();
+    match provider.synthesize(&text).await {
+        Ok(stream) => {
+            info!(
+                provider = provider.name(),
+                chars = text.len(),
+                request_ms = started.elapsed().as_millis() as u64,
+                ">>> tts synthesize"
+            );
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "audio/pcm")
+                .header("X-Sample-Rate", crate::tts::SAMPLE_RATE_HZ.to_string())
+                .header("X-Channels", crate::tts::CHANNELS.to_string())
+                .body(axum::body::Body::from_stream(stream))
+                .unwrap()
+        }
+        Err(error) => {
+            warn!(provider = provider.name(), %error, "tts synthesis failed; device will fall back");
+            (StatusCode::BAD_GATEWAY, error).into_response()
+        }
+    }
+}
 
 async fn health(State(state): State<ApiState>) -> Json<serde_json::Value> {
     let config = state.shared_config.read().await;
@@ -297,6 +349,7 @@ struct SettingsResponse {
     weather: WeatherSettingsResponse,
     contacts: ContactsSettingsResponse,
     dev: DevSettingsResponse,
+    music: MusicSettingsResponse,
 }
 
 #[derive(Serialize)]
@@ -361,6 +414,12 @@ struct DevSettingsResponse {
     apk_install_enabled: bool,
 }
 
+#[derive(Serialize)]
+struct MusicSettingsResponse {
+    provider: String,
+    resolver_url: String,
+}
+
 async fn get_settings(State(state): State<ApiState>) -> Json<SettingsResponse> {
     let config = state.shared_config.read().await;
     Json(SettingsResponse {
@@ -407,6 +466,10 @@ async fn get_settings(State(state): State<ApiState>) -> Json<SettingsResponse> {
         },
         dev: DevSettingsResponse {
             apk_install_enabled: config.dev.apk_install_enabled,
+        },
+        music: MusicSettingsResponse {
+            provider: config.music.provider.clone(),
+            resolver_url: config.music.resolver_url.clone(),
         },
     })
 }
@@ -741,6 +804,8 @@ struct UpdateSettingsRequest {
     weather: Option<UpdateWeatherSettings>,
     contacts: Option<UpdateContactsSettings>,
     dev: Option<UpdateDevSettings>,
+    music: Option<UpdateMusicSettings>,
+    tts: Option<UpdateTtsSettings>,
     /// Storage is read-only; presence in the request is rejected.
     storage: Option<serde_json::Value>,
 }
@@ -821,6 +886,22 @@ where
 #[derive(Deserialize)]
 struct UpdateWeatherSettings {
     pirate_weather_api_key: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UpdateMusicSettings {
+    provider: Option<String>,
+    resolver_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UpdateTtsSettings {
+    enabled: Option<bool>,
+    provider: Option<String>,
+    model: Option<String>,
+    voice: Option<String>,
+    instructions: Option<String>,
+    api_key: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1052,6 +1133,45 @@ async fn update_settings(
         }
     }
 
+    // --- Music changes ---
+    // Note: the tidal-shim provider is built once at startup, so a provider or
+    // resolver-url change is persisted to disk and takes effect on the next
+    // server start (the config write below), not live.
+    if let Some(ref music) = body.music {
+        if let Some(ref provider) = music.provider {
+            if *provider != config.music.provider {
+                config.music.provider = provider.clone();
+            }
+        }
+        if let Some(ref resolver_url) = music.resolver_url {
+            if *resolver_url != config.music.resolver_url {
+                config.music.resolver_url = resolver_url.clone();
+            }
+        }
+    }
+
+    // --- TTS changes ---
+    if let Some(ref tts) = body.tts {
+        if let Some(enabled) = tts.enabled {
+            config.tts.enabled = enabled;
+        }
+        if let Some(ref provider) = tts.provider {
+            config.tts.provider = provider.clone();
+        }
+        if let Some(ref model) = tts.model {
+            config.tts.model = model.clone();
+        }
+        if let Some(ref voice) = tts.voice {
+            config.tts.voice = voice.clone();
+        }
+        if let Some(ref instructions) = tts.instructions {
+            config.tts.instructions = Some(instructions.clone());
+        }
+        if let Some(ref api_key) = tts.api_key {
+            config.tts.api_key = Some(api_key.clone());
+        }
+    }
+
     // --- Contacts changes ---
     if let Some(ref contacts) = body.contacts {
         if let Some(new_val) = contacts.trust_all_contacts {
@@ -1180,6 +1300,10 @@ async fn update_settings(
         },
         dev: DevSettingsResponse {
             apk_install_enabled: config.dev.apk_install_enabled,
+        },
+        music: MusicSettingsResponse {
+            provider: config.music.provider.clone(),
+            resolver_url: config.music.resolver_url.clone(),
         },
     };
 
@@ -1347,6 +1471,36 @@ fn persist_config_inner(
     {
         let table = ensure_table(&mut doc, "dev");
         table["apk_install_enabled"] = toml_edit::value(config.dev.apk_install_enabled);
+    }
+
+    {
+        let table = ensure_table(&mut doc, "music");
+        table["provider"] = toml_edit::value(&config.music.provider);
+        table["resolver_url"] = toml_edit::value(&config.music.resolver_url);
+    }
+
+    // --- [tts] ---
+    // Without this the settings endpoint updates only the live config, and the
+    // configured voice silently reverts to the embedded engine on restart.
+    {
+        let table = ensure_table(&mut doc, "tts");
+        table["enabled"] = toml_edit::value(config.tts.enabled);
+        table["provider"] = toml_edit::value(&config.tts.provider);
+        table["model"] = toml_edit::value(&config.tts.model);
+        table["voice"] = toml_edit::value(&config.tts.voice);
+        for (key, value) in [
+            ("instructions", config.tts.instructions.as_ref()),
+            ("api_key", config.tts.api_key.as_ref()),
+        ] {
+            match value {
+                Some(value) => table[key] = toml_edit::value(value),
+                None => {
+                    if let Some(t) = table.as_table_mut() {
+                        t.remove(key);
+                    }
+                }
+            }
+        }
     }
 
     // Create .bak before writing

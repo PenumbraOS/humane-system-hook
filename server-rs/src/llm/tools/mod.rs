@@ -2,6 +2,7 @@ pub mod fastembed;
 #[cfg(target_os = "android")]
 pub mod logcat;
 pub mod memory;
+pub mod music;
 pub mod nearby_search;
 pub mod registry;
 pub mod reverse_geocode;

@@ -21,6 +21,8 @@ pub struct Config {
     pub dev: DevConfig,
     #[serde(default)]
     pub music: MusicConfig,
+    #[serde(default)]
+    pub tts: TtsConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -242,18 +244,87 @@ pub struct DevConfig {
 pub struct MusicConfig {
     #[serde(default = "default_music_provider")]
     pub provider: String,
+    /// Base URL of the LAN companion resolver used by the `youtube` provider
+    /// (e.g. `http://192.168.1.50:8765`). Ignored by other providers.
+    #[serde(default = "default_music_resolver_url")]
+    pub resolver_url: String,
 }
 
 impl Default for MusicConfig {
     fn default() -> Self {
         Self {
             provider: default_music_provider(),
+            resolver_url: default_music_resolver_url(),
         }
     }
 }
 
+/// Voice synthesis. Disabled by default: with no provider the device keeps
+/// using its embedded Microsoft voice, which is the pre-existing behaviour.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct TtsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_tts_provider")]
+    pub provider: String,
+    #[serde(default = "default_tts_model")]
+    pub model: String,
+    #[serde(default = "default_tts_voice")]
+    pub voice: String,
+    /// Free-text delivery direction (tone, pace) for models that accept it.
+    #[serde(default)]
+    pub instructions: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
+impl Default for TtsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            provider: default_tts_provider(),
+            model: default_tts_model(),
+            voice: default_tts_voice(),
+            instructions: None,
+            api_key: None,
+        }
+    }
+}
+
+impl TtsConfig {
+    /// Environment first so the key never has to live in config.toml.
+    pub fn resolve_api_key(&self) -> Option<String> {
+        let env_var = match self.provider.as_str() {
+            "elevenlabs" => "ELEVENLABS_API_KEY",
+            _ => "OPENAI_API_KEY",
+        };
+        if let Ok(key) = std::env::var(env_var) {
+            if !key.trim().is_empty() {
+                return Some(key);
+            }
+        }
+        self.api_key.clone().filter(|key| !key.trim().is_empty())
+    }
+}
+
+fn default_tts_provider() -> String {
+    "openai".to_string()
+}
+
+fn default_tts_model() -> String {
+    "gpt-4o-mini-tts".to_string()
+}
+
+fn default_tts_voice() -> String {
+    "alloy".to_string()
+}
+
 fn default_music_provider() -> String {
     "mock".to_string()
+}
+
+fn default_music_resolver_url() -> String {
+    "http://127.0.0.1:8765".to_string()
 }
 
 fn default_log_file_prefix() -> String {

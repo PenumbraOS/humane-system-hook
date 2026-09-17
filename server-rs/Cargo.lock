@@ -2952,6 +2952,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "bytes",
  "chrono",
  "dotenvy",
  "fastembed",
@@ -5819,7 +5820,7 @@ dependencies = [
 [[package]]
 name = "rig"
 version = "0.41.0"
-source = "git+https://github.com/agg23/rig?branch=fastembed5.8#0376bfba9821c685e175c02dcdc6146ca79a8380"
+source = "git+https://github.com/keepgoingcari/rig?branch=fix%2Fgemini-interactions-thought-replay#50a53ba0a6b73ce8ad7fccf16aac1f784ea1bfaa"
 dependencies = [
  "rig-agent",
  "rig-core",
@@ -5832,7 +5833,7 @@ dependencies = [
 [[package]]
 name = "rig-agent"
 version = "0.41.0"
-source = "git+https://github.com/agg23/rig?branch=fastembed5.8#0376bfba9821c685e175c02dcdc6146ca79a8380"
+source = "git+https://github.com/keepgoingcari/rig?branch=fix%2Fgemini-interactions-thought-replay#50a53ba0a6b73ce8ad7fccf16aac1f784ea1bfaa"
 dependencies = [
  "async-stream",
  "fastrand",
@@ -5852,7 +5853,7 @@ dependencies = [
 [[package]]
 name = "rig-core"
 version = "0.41.0"
-source = "git+https://github.com/agg23/rig?branch=fastembed5.8#0376bfba9821c685e175c02dcdc6146ca79a8380"
+source = "git+https://github.com/keepgoingcari/rig?branch=fix%2Fgemini-interactions-thought-replay#50a53ba0a6b73ce8ad7fccf16aac1f784ea1bfaa"
 dependencies = [
  "as-any",
  "async-stream",
@@ -5885,7 +5886,7 @@ dependencies = [
 [[package]]
 name = "rig-fastembed"
 version = "0.41.0"
-source = "git+https://github.com/agg23/rig?branch=fastembed5.8#0376bfba9821c685e175c02dcdc6146ca79a8380"
+source = "git+https://github.com/keepgoingcari/rig?branch=fix%2Fgemini-interactions-thought-replay#50a53ba0a6b73ce8ad7fccf16aac1f784ea1bfaa"
 dependencies = [
  "fastembed",
  "rig-core",
@@ -5898,7 +5899,7 @@ dependencies = [
 [[package]]
 name = "rig-helixdb"
 version = "0.41.0"
-source = "git+https://github.com/agg23/rig?branch=fastembed5.8#0376bfba9821c685e175c02dcdc6146ca79a8380"
+source = "git+https://github.com/keepgoingcari/rig?branch=fix%2Fgemini-interactions-thought-replay#50a53ba0a6b73ce8ad7fccf16aac1f784ea1bfaa"
 dependencies = [
  "reqwest 0.13.2",
  "rig-core",
@@ -5910,7 +5911,7 @@ dependencies = [
 [[package]]
 name = "rig-lancedb"
 version = "0.41.0"
-source = "git+https://github.com/agg23/rig?branch=fastembed5.8#0376bfba9821c685e175c02dcdc6146ca79a8380"
+source = "git+https://github.com/keepgoingcari/rig?branch=fix%2Fgemini-interactions-thought-replay#50a53ba0a6b73ce8ad7fccf16aac1f784ea1bfaa"
 dependencies = [
  "arrow-array",
  "deranged",
@@ -5924,7 +5925,7 @@ dependencies = [
 [[package]]
 name = "rig-milvus"
 version = "0.41.0"
-source = "git+https://github.com/agg23/rig?branch=fastembed5.8#0376bfba9821c685e175c02dcdc6146ca79a8380"
+source = "git+https://github.com/keepgoingcari/rig?branch=fix%2Fgemini-interactions-thought-replay#50a53ba0a6b73ce8ad7fccf16aac1f784ea1bfaa"
 dependencies = [
  "reqwest 0.13.2",
  "rig-core",

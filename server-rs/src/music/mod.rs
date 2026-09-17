@@ -11,6 +11,7 @@
 //! real providers land in later PRs behind this same trait.
 
 mod mock;
+mod youtube;
 
 use std::sync::Arc;
 
@@ -42,6 +43,13 @@ pub trait MusicProvider: Send + Sync {
     /// The best match for a search term, or `None` if nothing matched.
     async fn search_top(&self, term: &str) -> Option<ProviderTrack>;
 
+    /// Several matches for a search term, best first. Backs the shim's artist
+    /// endpoints, where the app expects a body of work rather than one track.
+    /// Defaults to the single best match so providers can opt in.
+    async fn search_many(&self, term: &str, limit: usize) -> Vec<ProviderTrack> {
+        self.search_top(term).await.into_iter().take(limit).collect()
+    }
+
     /// Metadata for one track by id.
     async fn track(&self, id: &str) -> ProviderTrack;
 
@@ -61,6 +69,7 @@ pub type SharedProvider = Arc<dyn MusicProvider>;
 pub fn from_config(config: &Config) -> SharedProvider {
     match config.music.provider.as_str() {
         "mock" => Arc::new(mock::MockProvider),
+        "youtube" => Arc::new(youtube::YouTubeMusicProvider::from_config(config)),
         other => {
             tracing::warn!(provider = other, "unknown music provider, using mock");
             Arc::new(mock::MockProvider)

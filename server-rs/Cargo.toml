@@ -30,6 +30,7 @@ rig-fastembed = { version = "0.41", default-features = false }
 toml = "0.8"
 toml_edit = "0.22"
 futures = "0.3"
+bytes = "1"
 base64 = "0.22"
 rcgen = "0.14"
 aes-gcm = "0.10"
@@ -41,7 +42,7 @@ http = "1"
 http-body = "1"
 http-body-util = "0.1"
 axum = { version = "0.8", features = ["multipart"] }
-reqwest = { version = "0.13", default-features = false, features = ["json", "form", "native-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "form", "native-tls", "stream"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 dotenvy = "0.15"
 memvid-core = { version = "=2.0.140", default-features = false, features = ["lex", "vec"] }
@@ -65,5 +66,5 @@ tempfile = "3"
 
 [patch.crates-io]
 memvid-core = { git = "https://github.com/agg23/memvid", branch = "no-lock" }
-rig = { git = "https://github.com/agg23/rig", branch = "fastembed5.8" }
-rig-fastembed = { git = "https://github.com/agg23/rig", branch = "fastembed5.8" }
+rig = { git = "https://github.com/keepgoingcari/rig", branch = "fix/gemini-interactions-thought-replay" }
+rig-fastembed = { git = "https://github.com/keepgoingcari/rig", branch = "fix/gemini-interactions-thought-replay" }

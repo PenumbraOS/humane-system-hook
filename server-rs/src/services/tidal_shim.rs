@@ -5,10 +5,11 @@
 //! keys mirror the app's Gson models.
 
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 use axum::extract::{Path, Query, Request, State};
-use axum::http::header;
-use axum::response::IntoResponse;
+use axum::http::{header, HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use base64::Engine as _;
@@ -24,7 +25,51 @@ const TONE_SAMPLE_RATE: u32 = 44100;
 const TONE_SECONDS: u32 = 20;
 const TONE_HZ: f64 = 440.0;
 
+/// The app's Tidal models type an artist id as a number, so a synthetic
+/// numeric id stands in for each artist name and this registry maps it back.
+/// (A track id is a string in the same models, which is why those pass through
+/// untouched.) Populated whenever an artist is emitted, read when the app
+/// follows up on one.
+#[derive(Clone, Default)]
+pub struct ArtistRegistry(Arc<RwLock<HashMap<u64, String>>>);
+
+impl ArtistRegistry {
+    /// Stable id for a name (FNV-1a), remembered for the reverse lookup.
+    fn register(&self, name: &str) -> u64 {
+        let id = artist_id(name);
+        if let Ok(mut map) = self.0.write() {
+            map.insert(id, name.to_string());
+        }
+        id
+    }
+
+    fn name(&self, id: u64) -> Option<String> {
+        self.0.read().ok()?.get(&id).cloned()
+    }
+}
+
+/// FNV-1a over the lowercased name, squeezed into a comfortably small positive
+/// range so it survives any 32/64-bit signed field on the client.
+fn artist_id(name: &str) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in name.to_lowercase().bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x1000_0000_01b3);
+    }
+    hash % 1_000_000_000 + 1
+}
+
+#[derive(Clone)]
+pub struct ShimState {
+    provider: SharedProvider,
+    artists: ArtistRegistry,
+}
+
 pub fn router(provider: SharedProvider) -> Router {
+    let state = ShimState {
+        provider,
+        artists: ArtistRegistry::default(),
+    };
     Router::new()
         .route(
             "/tidal-shim/v1/featured/recommended/playlists",
@@ -43,10 +88,20 @@ pub fn router(provider: SharedProvider) -> Router {
             "/tidal-shim/v1/tracks/{id}/playbackinfopostpaywall",
             get(playback_info),
         )
+        // An artist-name request ("play <artist>") resolves the artist first,
+        // then pulls a body of work from one of these.
+        .route("/tidal-shim/v1/artists/{id}", get(artist))
+        .route("/tidal-shim/v1/artists/{id}/toptracks", get(artist_tracks))
+        .route("/tidal-shim/v1/artists/{id}/tracks", get(artist_tracks))
+        .route("/tidal-shim/v1/artists/{id}/radio", get(artist_tracks))
+        .route("/tidal-shim/v1/artists/{id}/mix", get(artist_tracks))
+        .route("/tidal-shim/v1/artists/{id}/albums", get(artist_albums))
+        .route("/tidal-shim/v1/artists/{id}/videos", get(artist_videos))
+        .route("/tidal-shim/v1/artists/{id}/bio", get(artist_bio))
         .route("/tidal-shim/audio/tone.wav", get(tone_wav))
         // Fallback: an object, so the client's Gson error-parsing can't crash on a non-object body.
         .route("/tidal-shim/{*rest}", get(unmatched).post(unmatched))
-        .with_state(provider)
+        .with_state(state)
 }
 
 async fn featured_playlists() -> impl IntoResponse {
@@ -60,33 +115,37 @@ async fn featured_playlists() -> impl IntoResponse {
 }
 
 async fn playlist_items(
-    State(provider): State<SharedProvider>,
+    State(state): State<ShimState>,
     Path(uuid): Path<String>,
 ) -> impl IntoResponse {
+    let provider = &state.provider;
     info!(uuid = %uuid, provider = provider.name(), ">>> tidal-shim playlists/{{uuid}}/items");
     track_item_wrapper(tracks_json(provider.queue(QUEUE_SIZE).await))
 }
 
 async fn single_track(
-    State(provider): State<SharedProvider>,
+    State(state): State<ShimState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    let provider = &state.provider;
     info!(track_id = %id, ">>> tidal-shim tracks/{{id}}");
     Json(track_json_from_provider(&provider.track(&id).await))
 }
 
 async fn track_radio(
-    State(provider): State<SharedProvider>,
+    State(state): State<ShimState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    let provider = &state.provider;
     info!(track_id = %id, ">>> tidal-shim tracks/{{id}}/radio");
     wrapper(tracks_json(provider.recommendations(&id, QUEUE_SIZE).await))
 }
 
 async fn track_recommendations(
-    State(provider): State<SharedProvider>,
+    State(state): State<ShimState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    let provider = &state.provider;
     info!(track_id = %id, ">>> tidal-shim tracks/{{id}}/recommendations");
     let items: Vec<Value> = tracks_json(provider.recommendations(&id, QUEUE_SIZE).await)
         .into_iter()
@@ -98,28 +157,49 @@ async fn track_recommendations(
 
 // Every section below must be present or the client NPEs.
 async fn search_top_hits(
-    State(provider): State<SharedProvider>,
+    State(state): State<ShimState>,
     Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
+    let provider = &state.provider;
     let term = params
         .get("query")
         .or_else(|| params.get("term"))
         .cloned()
         .unwrap_or_default();
     info!(term = %term, provider = provider.name(), ">>> tidal-shim search/top-hits");
-    // Seed the queue with the match plus related tracks so "next" has somewhere to go.
-    let tracks = match provider.search_top(&term).await {
-        Some(seed) => {
-            let mut list = vec![seed.clone()];
-            for t in provider.recommendations(&seed.id, QUEUE_SIZE).await {
-                if t.id != seed.id {
-                    list.push(t);
-                }
+    // Every result must actually match the term: the app picks an artist out of
+    // this response, so padding it with unrelated "recommendations" lets it play
+    // something the user never asked for.
+    let mut tracks = provider.search_many(&term, QUEUE_SIZE).await;
+    if tracks.is_empty() {
+        tracks = provider.queue(QUEUE_SIZE).await;
+    }
+    // The app answers "play <artist>" through TidalArtistNameCollectionQuery,
+    // which reads this `artists` section — leaving it empty makes the app throw
+    // TidalResultsNotFoundException and never ask for a stream, so the request
+    // dies silently after the search.
+    // The per-track artist is YouTube's *uploader*, which is frequently a
+    // channel rather than the performer — searching "michael jackson" yields
+    // uploaders like "Dlo", and the app will happily resolve the artist to one
+    // of those and play it. Lead with an artist named for the search term
+    // itself, so the name the user said is the one available to match.
+    let artist_names = std::iter::once(term.trim().to_string())
+        .filter(|term| !term.is_empty())
+        .chain(artist_names_from(&tracks))
+        .collect::<Vec<_>>();
+    let mut seen: Vec<String> = Vec::new();
+    let artists: Vec<Value> = artist_names
+        .into_iter()
+        .filter(|name| {
+            let fresh = !seen.iter().any(|s| s.eq_ignore_ascii_case(name));
+            if fresh {
+                seen.push(name.clone());
             }
-            list
-        }
-        None => provider.queue(QUEUE_SIZE).await,
-    };
+            fresh
+        })
+        .map(|name| artist_json(state.artists.register(&name), &name))
+        .collect();
+
     let tracks = tracks_json(tracks);
     let top = tracks.first().cloned().unwrap_or_else(|| json!({}));
     Json(json!({
@@ -127,16 +207,61 @@ async fn search_top_hits(
         "genres": [],
         "tracks": section(tracks),
         "albums": empty_section(),
-        "artists": empty_section(),
+        "artists": section(artists),
         "playlists": empty_section(),
         "videos": empty_section()
     }))
 }
 
-async fn playback_info(
-    State(provider): State<SharedProvider>,
+/// Resolve an artist id back to the name the search registered, falling back to
+/// the raw id so a restarted server degrades to "something plays" rather than
+/// an error.
+async fn artist_name_for(state: &ShimState, id: &str) -> String {
+    id.parse::<u64>()
+        .ok()
+        .and_then(|id| state.artists.name(id))
+        .unwrap_or_else(|| id.to_string())
+}
+
+async fn artist(State(state): State<ShimState>, Path(id): Path<String>) -> impl IntoResponse {
+    let name = artist_name_for(&state, &id).await;
+    info!(artist_id = %id, %name, ">>> tidal-shim artists/{{id}}");
+    Json(artist_json(id.parse().unwrap_or_else(|_| artist_id(&name)), &name))
+}
+
+async fn artist_tracks(
+    State(state): State<ShimState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    let name = artist_name_for(&state, &id).await;
+    info!(artist_id = %id, %name, provider = state.provider.name(), ">>> tidal-shim artists/{{id}} tracks");
+    let mut tracks = state.provider.search_many(&name, QUEUE_SIZE).await;
+    if tracks.is_empty() {
+        tracks = state.provider.queue(QUEUE_SIZE).await;
+    }
+    Json(section(tracks_json(tracks)))
+}
+
+async fn artist_albums(Path(id): Path<String>) -> impl IntoResponse {
+    info!(artist_id = %id, ">>> tidal-shim artists/{{id}}/albums");
+    Json(empty_section())
+}
+
+async fn artist_videos(Path(id): Path<String>) -> impl IntoResponse {
+    info!(artist_id = %id, ">>> tidal-shim artists/{{id}}/videos");
+    Json(empty_section())
+}
+
+async fn artist_bio(Path(id): Path<String>) -> impl IntoResponse {
+    info!(artist_id = %id, ">>> tidal-shim artists/{{id}}/bio");
+    Json(json!({ "source": "", "lastUpdated": "2020-01-01T00:00:00.000+0000", "text": "" }))
+}
+
+async fn playback_info(
+    State(state): State<ShimState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let provider = &state.provider;
     info!(track_id = %id, provider = provider.name(), ">>> tidal-shim playbackinfopostpaywall");
     let manifest_json = json!({
         "mimeType": "audio/wav",
@@ -161,15 +286,44 @@ async fn playback_info(
     }))
 }
 
-async fn tone_wav() -> impl IntoResponse {
+async fn tone_wav(headers: HeaderMap) -> impl IntoResponse {
     info!(">>> tidal-shim audio/tone.wav");
-    (
-        [
-            (header::CONTENT_TYPE, "audio/wav"),
-            (header::ACCEPT_RANGES, "bytes"),
-        ],
-        generate_tone_wav(),
-    )
+    let body = generate_tone_wav();
+    let total = body.len();
+    let Some(range) = headers.get(header::RANGE).and_then(|value| value.to_str().ok()) else {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "audio/wav")
+            .header(header::ACCEPT_RANGES, "bytes")
+            .body(axum::body::Body::from(body))
+            .unwrap();
+    };
+
+    let Some(range) = range.strip_prefix("bytes=")
+        .and_then(|value| value.split(',').next())
+        .and_then(|value| {
+            let (start, end) = value.split_once('-')?;
+            let start = start.parse::<usize>().ok()?;
+            let end = if end.is_empty() { total.saturating_sub(1) } else { end.parse().ok()? };
+            (start <= end && start < total).then_some((start, end.min(total - 1)))
+        }) else {
+        return Response::builder()
+            .status(StatusCode::RANGE_NOT_SATISFIABLE)
+            .header(header::ACCEPT_RANGES, "bytes")
+            .body(axum::body::Body::empty())
+            .unwrap();
+    };
+
+    let (start, end) = range;
+    let content_length = end - start + 1;
+    Response::builder()
+        .status(StatusCode::PARTIAL_CONTENT)
+        .header(header::CONTENT_TYPE, "audio/wav")
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CONTENT_RANGE, format!("bytes {start}-{end}/{total}"))
+        .header(header::CONTENT_LENGTH, content_length)
+        .body(axum::body::Body::from(body[start..=end].to_vec()))
+        .unwrap()
 }
 
 async fn unmatched(request: Request) -> impl IntoResponse {
@@ -210,6 +364,30 @@ fn track_json(id: &str, title: &str, artist: &str, album: &str, duration_secs: u
         "version": null,
         "artists": [ { "id": 0, "name": artist, "type": "MAIN" } ],
         "album": { "id": 0, "title": album, "cover": null, "videoCover": null, "url": "" }
+    })
+}
+
+/// Distinct artist names from a result set, best match first.
+fn artist_names_from(tracks: &[ProviderTrack]) -> Vec<String> {
+    let mut seen = Vec::new();
+    for track in tracks {
+        let name = track.artist.trim();
+        if !name.is_empty() && !seen.iter().any(|s: &String| s.eq_ignore_ascii_case(name)) {
+            seen.push(name.to_string());
+        }
+    }
+    seen
+}
+
+fn artist_json(id: u64, name: &str) -> Value {
+    json!({
+        "id": id,
+        "name": name,
+        "artistTypes": [ "ARTIST" ],
+        "artistRoles": [ { "categoryId": 1, "category": "Main" } ],
+        "picture": null,
+        "popularity": 0,
+        "url": ""
     })
 }
 
