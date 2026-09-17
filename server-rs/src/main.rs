@@ -498,6 +498,9 @@ async fn async_main(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
         .allow_headers([http::header::CONTENT_TYPE])
         .expose_headers([http::header::CONTENT_TYPE]);
 
+    // Level-over-time is the only power measurement the kernel allows us.
+    api::battery::spawn_sampler();
+
     let api_router = api::router(api_state)
         .layer(cors)
         .layer(axum::middleware::from_fn(

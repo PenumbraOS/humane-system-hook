@@ -4,6 +4,7 @@
 //! Network Access (LNA) API.  All responses include CORS headers so the
 //! public HTTPS portal can reach this HTTP server on the LAN.
 
+pub mod battery;
 mod contacts;
 mod dev;
 pub mod device;
@@ -115,6 +116,10 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/conversations/{id}", get(get_conversation))
         .nest("/api", contacts::router())
         .route("/api/device", get(DeviceApi::get_device))
+        // Power telemetry: the only way to tell whether a change helped.
+        .route("/api/battery", get(battery::get_battery))
+        .route("/api/battery/history", get(battery::get_battery_history))
+        .route("/api/battery/stats", get(battery::get_battery_stats))
         .route("/api/settings", get(get_settings))
         .route("/api/settings", put(update_settings))
         .route("/api/events", get(event_stream))

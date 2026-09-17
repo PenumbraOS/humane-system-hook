@@ -23,11 +23,29 @@ from urllib.parse import parse_qs, urlparse
 ROOT = Path(__file__).resolve().parent.parent
 CACHE = Path(os.environ.get("YTMUSIC_CACHE", ROOT / ".ytmusic-cache"))
 YTDLP = os.environ.get("YTDLP", "yt-dlp")
+FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
+
+# A song is not two hours long. Generic searches ("popular music") return
+# multi-hour compilation videos, and this resolver downloads a track in full
+# before serving any of it — so one such result pulled 1.5GB from YouTube in a
+# single request. That is both the wrong content and what gets the client
+# bot-flagged. Anything longer than this is not a track.
+MAX_TRACK_SECONDS = int(os.environ.get("MAX_TRACK_SECONDS", "720"))
+
+# Browser to lift YouTube cookies from ("chrome", "safari", "firefox", ...).
+# Unset means anonymous requests, which YouTube increasingly answers with
+# "Sign in to confirm you're not a bot". Set it and yt-dlp uses the signed-in
+# session from that browser.
+COOKIES_BROWSER = os.environ.get("YTDLP_COOKIES_BROWSER", "").strip()
+
+
+def cookie_args() -> list[str]:
+    return ["--cookies-from-browser", COOKIES_BROWSER] if COOKIES_BROWSER else []
 
 
 def run_json(*args: str) -> dict:
     result = subprocess.run(
-        [YTDLP, *args], check=True, capture_output=True, text=True, timeout=60
+        [YTDLP, *cookie_args(), *args], check=True, capture_output=True, text=True, timeout=60
     )
     return json.loads(result.stdout)
 
@@ -58,13 +76,24 @@ def is_video_entry(entry: dict) -> bool:
         return False
     if entry.get("_type") not in (None, "url", "video"):
         return False
-    return bool(VIDEO_ID.match(entry.get("id") or ""))
+    if not VIDEO_ID.match(entry.get("id") or ""):
+        return False
+    # A missing duration is itself a signal: ordinary song results carry one,
+    # while the endless "background music" compilations and live streams that
+    # generic searches surface frequently do not. Requiring it costs a few real
+    # results and blocks the ones that pull gigabytes.
+    duration = entry.get("duration")
+    if not duration or duration > MAX_TRACK_SECONDS:
+        return False
+    return True
 
 
 def search(term: str, limit: int = 6) -> list[dict]:
-    # Over-fetch: the non-video entries dropped below would otherwise eat into
-    # the limit and return a short (or empty) list for a valid search.
-    data = run_json("--flat-playlist", "--dump-single-json", f"ytsearch{limit * 3}:{term}")
+    # Over-fetch generously. Generic terms ("popular music") are dominated by
+    # hour-long compilations, which the filter drops — at 3x a queue request
+    # came back with a single track. Named searches are unaffected; they just
+    # fill from the first few results.
+    data = run_json("--flat-playlist", "--dump-single-json", f"ytsearch{limit * 8}:{term}")
     entries = [entry for entry in data.get("entries", []) if is_video_entry(entry)]
     return [track_from_entry(entry) for entry in entries[:limit]]
 
@@ -95,16 +124,49 @@ def related(seed_id: str, limit: int = 6) -> list[dict]:
     return tracks[:limit]
 
 
-def cached_wav(video_id: str) -> Path:
+# `format` query value -> (file extension, yt-dlp --audio-format, content type)
+FORMATS = {
+    "wav": ("wav", "wav", "audio/wav"),
+    "m4a": ("m4a", "m4a", "audio/mp4"),
+}
+DEFAULT_FORMAT = "wav"
+
+
+def cached_audio(video_id: str, fmt: str = DEFAULT_FORMAT) -> tuple[Path, str]:
+    """Return a cached audio file for `video_id`, downloading it if needed."""
+    ext, audio_format, content_type = FORMATS.get(fmt, FORMATS[DEFAULT_FORMAT])
     CACHE.mkdir(parents=True, exist_ok=True)
-    target = CACHE / f"{video_id}.wav"
+    target = CACHE / f"{video_id}.{ext}"
     if target.exists() and target.stat().st_size > 44:
-        return target
+        return target, content_type
+
+    # Transcode from a WAV we already hold rather than fetching again: it is
+    # far faster, and YouTube rate-limits repeat downloads ("Sign in to confirm
+    # you're not a bot") long before the cache goes cold.
+    source = CACHE / f"{video_id}.wav"
+    if fmt != "wav" and source.exists() and source.stat().st_size > 44:
+        # The extension must stay correct: ffmpeg picks the container from it,
+        # and a ".part" suffix makes it fail with "Unable to find a suitable
+        # output format".
+        tmp = CACHE / f"{video_id}.part.{ext}"
+        subprocess.run(
+            [FFMPEG, "-nostdin", "-y", "-i", str(source),
+             "-c:a", "aac", "-b:a", "128k", str(tmp)],
+            check=True, timeout=300,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        tmp.replace(target)
+        return target, content_type
+
     temp_dir = Path(tempfile.mkdtemp(prefix=f"{video_id}-", dir=CACHE))
-    temp_path = temp_dir / "audio.wav"
+    temp_path = temp_dir / f"audio.{ext}"
     try:
         subprocess.run(
-            [YTDLP, "--no-playlist", "-x", "--audio-format", "wav",
+            [YTDLP, *cookie_args(),
+             # Belt and braces: metadata can omit duration, and without this a
+             # compilation still downloads in full.
+             "--match-filter", f"duration < {MAX_TRACK_SECONDS}",
+             "--no-playlist", "-x", "--audio-format", audio_format,
              # Prefer any real audio stream, and use player clients that avoid the
              # android_vr 403 / PO-token path YouTube now gates some videos behind.
              "-f", "bestaudio/best",
@@ -116,7 +178,7 @@ def cached_wav(video_id: str) -> Path:
         produced = next(temp_dir.glob("audio.*"))
         produced.rename(temp_path)
         temp_path.replace(target)
-        return target
+        return target, content_type
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -152,13 +214,14 @@ class ResolverHandler(BaseHTTPRequestHandler):
                 seed = parsed.path.rsplit("/", 1)[-1]
                 return self.send_json({"tracks": related(seed)})
             if parsed.path.startswith("/stream/"):
-                return self.stream(parsed.path.rsplit("/", 1)[-1])
+                fmt = parse_qs(parsed.query).get("format", [DEFAULT_FORMAT])[0]
+                return self.stream(parsed.path.rsplit("/", 1)[-1], fmt)
             return self.send_json({"error": "not found"}, 404)
         except (subprocess.SubprocessError, json.JSONDecodeError, IndexError, KeyError) as error:
             self.send_json({"error": str(error)}, 502)
 
-    def stream(self, video_id: str) -> None:
-        path = cached_wav(video_id)
+    def stream(self, video_id: str, fmt: str = DEFAULT_FORMAT) -> None:
+        path, content_type = cached_audio(video_id, fmt)
         total = path.stat().st_size
         start, end = 0, total - 1
         range_header = self.headers.get("Range")
@@ -174,7 +237,7 @@ class ResolverHandler(BaseHTTPRequestHandler):
                 return
         length = end - start + 1
         self.send_response(206 if range_header else 200)
-        self.send_header("Content-Type", "audio/wav")
+        self.send_header("Content-Type", content_type)
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(length))
         if range_header:
